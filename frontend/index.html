@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="he">
+<head>
+  <meta charset="utf-8" />
+  <title>תרומות דם - דמו</title>
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        crossorigin=""/>
+  <style>html,body,#map{height:100%;margin:0}</style>
+</head>
+<body>
+<div id="controls" style="position:absolute;z-index:1000;padding:8px;background:#fff">
+  תאריך: <input type="date" id="date">
+  עיר: <select id="city"><option value="">כל הערים</option></select>
+</div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        crossorigin=""></script>
+<script>
+const API = "";
+
+const map = L.map('map').setView([31.8, 34.9], 8);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            {attribution:'© OpenStreetMap'}).addTo(map);
+
+const citySel = document.getElementById('city');
+const dateInp = document.getElementById('date');
+dateInp.valueAsDate = new Date();            // сегодня по умолчанию
+
+fetch(`${API}/cities`)
+  .then(r => r.json())
+  .then(cities => {
+      cities.forEach(c => {
+          const o=document.createElement('option');
+          o.value=o.textContent=c;
+          citySel.appendChild(o);
+      });
+  });
+
+function refresh() {
+  const params = new URLSearchParams({
+      date: dateInp.value,
+      city: citySel.value
+  });
+  fetch(`${API}/donations?`+params)
+    .then(r => r.json())
+    .then(points => {
+        markers.clearLayers();
+        points.forEach(p => {
+            const label = `
+<strong>${p.city} ${p.street||''} ${p.numhouse||''}</strong><br>
+${p.from_hour}&nbsp;–&nbsp;${p.to_hour}<br>
+<a href="${p.scheduling_url}" target="_blank">להרשמה / запись</a>`;
+            L.marker([p.lat, p.lon]).bindPopup(label).addTo(markers);
+        });
+    });
+}
+
+const markers = L.layerGroup().addTo(map);
+dateInp.onchange = citySel.onchange = refresh;
+refresh();
+</script>
+</body>
+</html>
