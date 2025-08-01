@@ -17,7 +17,7 @@ MDA_API_URL = "https://www.mdais.org/umbraco/api/invoker/execute"
 LANDING_URL = "https://www.mdais.org/blood-donation"
 
 
-def fetch_mda_data(limit: int = 10) -> list:
+def fetch_mda_data(limit: int | None = 10) -> list:
     """
     Fetches donation station data from the MDA public API.
     First visits the landing page to obtain cookies and CSRF token, then posts to the API.
@@ -72,7 +72,8 @@ def fetch_mda_data(limit: int = 10) -> list:
         data = response.json()
         if data and data.get("Result"):
             donations = json.loads(data["Result"])
-            donations = donations[:limit]
+            if limit is not None:
+                donations = donations[:limit]
             print(f"[Processor] Successfully fetched and parsed {len(donations)} records (limit {limit}).")
             return donations
         else:
@@ -128,7 +129,7 @@ def run_processor():
     geocache_conn = sqlite3.connect(GEOCACHE_DB_PATH)
     geocache_cursor = geocache_conn.cursor()
 
-    mda_stations = fetch_mda_data(limit=10)
+    mda_stations = fetch_mda_data(limit=100)
     if not mda_stations:
         print("[Processor] No data fetched. Aborting pipeline.")
         return

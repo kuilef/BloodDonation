@@ -45,17 +45,16 @@ function refresh() {
     .then(r => r.json())
     .then(points => {
         markers.clearLayers();
-        points
-          .filter(p => !citySel.value || p.city === citySel.value)
-          .forEach(p => {
-              const label = `
-<strong>${p.city} ${p.street||''} ${p.num_house||''}</strong><br>
-${p.from_hour}&nbsp;–&nbsp;${p.to_hour}<br>
-<a href="${p.scheduling_url}" target="_blank">להרשמה / запись</a>`;
-              L.marker([p.latitude, p.longitude])
-                .bindPopup(label)
-                .addTo(markers);
-          });
+    // Показываем все точки без фильтрации по городу
+    points.forEach(p => {
+        const label = `
+          <strong>${p.city} ${p.street||''} ${p.num_house||''}</strong><br>
+          ${p.from_hour}&nbsp;–&nbsp;${p.to_hour}<br>
+          <a href="${p.scheduling_url}" target="_blank">להרשמה / запись</a>`;
+        L.marker([p.latitude, p.longitude])
+          .bindPopup(label)
+          .addTo(markers);
+    });
     });
 }
 
