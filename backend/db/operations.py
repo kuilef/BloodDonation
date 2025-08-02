@@ -2,6 +2,8 @@ import sqlite3
 from datetime import date
 from typing import List, Dict, Any
 
+import dotenv
+dotenv.load_dotenv()
 from .schema import DONATIONS_DB_PATH
 
 def _dict_factory(cursor, row):

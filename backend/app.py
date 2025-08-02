@@ -38,8 +38,7 @@ app.add_middleware(
 )
 
 
-# Serve the frontend, including index.html and other assets like favicons
-app.mount("/", StaticFiles(directory="frontend", html=True), name="static")
+
 
 
 @app.on_event("startup")
@@ -69,3 +68,6 @@ async def get_donations(
         return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+# Serve the frontend, including index.html and other assets like favicons
+app.mount("/", StaticFiles(directory="frontend", html=True), name="static")

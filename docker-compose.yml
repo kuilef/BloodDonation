@@ -13,7 +13,7 @@ services:
     build: .
     env_file: .env              
     volumes:
-      - db:/data                
+      - ./db:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/donations"]
@@ -27,7 +27,7 @@ services:
     build: .
     env_file: .env
     volumes:
-      - db:/data
+      - ./db:/data
     command: >
       bash -c "
         while true; do
@@ -58,6 +58,5 @@ services:
 # Persisted data
 # ──────────────
 volumes:
-  db:
   caddy_data:
   caddy_config:

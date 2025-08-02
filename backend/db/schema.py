@@ -1,10 +1,21 @@
 import sqlite3
+import os
 import pathlib
+import dotenv
+dotenv.load_dotenv()
 
-# Define the path to the databases relative to the backend directory
-DB_DIR = pathlib.Path(__file__).parent
-DONATIONS_DB_PATH = DB_DIR / "donations.db"
-GEOCACHE_DB_PATH = DB_DIR.parent / "geocache.db"  # In backend/ directory
+# Define the path to the databases from environment variables
+_donations_db_path_str = os.getenv("DONATIONS_DB_PATH")
+_geocache_db_path_str = os.getenv("GEOCACHE_DB_PATH")
+
+if not _donations_db_path_str:
+    raise ValueError("DONATIONS_DB_PATH environment variable not found.")
+if not _geocache_db_path_str:
+    raise ValueError("GEOCACHE_DB_PATH environment variable not found.")
+
+# Convert paths to pathlib.Path objects for consistency
+DONATIONS_DB_PATH = pathlib.Path(_donations_db_path_str)
+GEOCACHE_DB_PATH = pathlib.Path(_geocache_db_path_str)
 
 def create_database():
     """
