@@ -4,13 +4,9 @@ import pathlib
 import json
 import re
 
-# Instead of custom geocoder, use unified Google API logic
-from ..geocode_and_map import find_coords
-from ..db.schema import DONATIONS_DB_PATH
-
-# Define paths relative to this file
-PIPELINE_DIR = pathlib.Path(__file__).parent
-GEOCACHE_DB_PATH = PIPELINE_DIR.parent / "geocache.db"
+# Use the project's canonical, caching geocoder
+from .geocoder import get_coordinates
+from ..db.schema import DONATIONS_DB_PATH, GEOCACHE_DB_PATH
 
 MDA_API_URL = "https://www.mdais.org/umbraco/api/invoker/execute"
 LANDING_URL = "https://www.mdais.org/blood-donation"
@@ -112,16 +108,13 @@ def insert_donation(conn: sqlite3.Connection, record: dict):
 def run_processor():
     """
     Main pipeline:
-    - Fetch first 10 records from MDA
-    - Use unified Google API (via geocode_and_map.find_coords)
+    - Fetch records from MDA
+    - Use the caching geocoder to find coordinates
     - Populate database
     """
     print("--- Starting Data Processing Pipeline ---")
 
-    if not GEOCACHE_DB_PATH.exists():
-        print(f"[Processor] ERROR: Geocache DB not found at {GEOCACHE_DB_PATH}")
-        return
-
+    # Database connections are established. The run_pipeline script ensures DBs are created.
     donations_conn = sqlite3.connect(DONATIONS_DB_PATH)
     geocache_conn = sqlite3.connect(GEOCACHE_DB_PATH)
     geocache_cursor = geocache_conn.cursor()
@@ -129,6 +122,8 @@ def run_processor():
     mda_stations = fetch_mda_data(limit=100)
     if not mda_stations:
         print("[Processor] No data fetched. Aborting pipeline.")
+        donations_conn.close()
+        geocache_conn.close()
         return
 
     clear_donations_table(donations_conn)
@@ -138,7 +133,8 @@ def run_processor():
     missing_coords_count = 0
 
     for station in mda_stations:
-        coords, exact = find_coords(station)
+        # This now uses the caching geocoder, passing the database cursor.
+        coords = get_coordinates(geocache_cursor, station)
         if coords:
             lat, lon = coords
             city = station.get('City', '').strip()

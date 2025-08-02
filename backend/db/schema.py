@@ -4,13 +4,14 @@ import pathlib
 # Define the path to the databases relative to the backend directory
 DB_DIR = pathlib.Path(__file__).parent
 DONATIONS_DB_PATH = DB_DIR / "donations.db"
+GEOCACHE_DB_PATH = DB_DIR.parent / "geocache.db"  # In backend/ directory
 
 def create_database():
     """
     Creates the donations.db database and the 'donations' table with necessary indexes.
     This function is idempotent.
     """
-    print(f"Initializing database at: {DONATIONS_DB_PATH}")
+    print(f"Initializing donations database at: {DONATIONS_DB_PATH}")
     conn = sqlite3.connect(DONATIONS_DB_PATH)
     cursor = conn.cursor()
 
@@ -37,7 +38,33 @@ def create_database():
 
     conn.commit()
     conn.close()
-    print("Database schema created successfully.")
+    print("Donations database schema created successfully.")
+
+def create_geocache_database():
+    """
+    Creates the geocache.db database and the 'geocache' table.
+    The schema is designed for the pipeline's caching geocoder.
+    This function is idempotent.
+    """
+    print(f"Initializing geocache database at: {GEOCACHE_DB_PATH}")
+    conn = sqlite3.connect(GEOCACHE_DB_PATH)
+    cursor = conn.cursor()
+
+    # key is a normalized string of address components
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS geocache (
+        key TEXT PRIMARY KEY,
+        lat REAL NOT NULL,
+        lon REAL NOT NULL,
+        is_exact INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+    print("Geocache database schema created successfully.")
 
 if __name__ == "__main__":
     create_database()
+    create_geocache_database()

@@ -1,13 +1,18 @@
 import sqlite3
 import time
+import os
 from typing import Dict, Tuple, List, Optional
 
 from geopy.geocoders import GoogleV3
 from geopy.extra.rate_limiter import RateLimiter
 from unidecode import unidecode
 
-# This key is from the original script. In a real application, this should be managed securely.
-GOOGLE_API_KEY = "AIzaSyCczZzPLT6H7e5LMcJwTYCnnQObjtKA4Sk"
+# The Google API key is loaded from an environment variable for security.
+# It must be set before running the application.
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    raise ValueError("GOOGLE_API_KEY environment variable not found.")
+
 geo = GoogleV3(api_key=GOOGLE_API_KEY, timeout=10)
 
 # Rate limiter to avoid burning through API quota
@@ -34,33 +39,62 @@ def create_address_key(item: Dict[str, str]) -> str:
     city = item.get("City", "").strip()
     street = item.get("Street", "").strip()
     num = item.get("NumHouse", "").strip()
+    name = item.get("Name", "").strip()     # IMPORTANT: Name is included to handle cases with only city and name.
     # Using a format that is readable and less prone to separator issues
-    return f"{city}, {street}, {num}".strip().rstrip(',')
+    return f"{city}, {street}, {num}, {name}".strip().rstrip(',')
 
 def _generate_queries(item: Dict[str, str], use_latin: bool = False) -> List[Tuple[str, bool]]:
     """
     Generates a list of address queries to try, from most specific to least specific.
+    This creates a fallback mechanism: if a detailed query fails, a less
+    detailed one is tried.
     Returns a list of (query_string, is_exact_flag).
     """
     def tr(s: str) -> str:
         return unidecode(s) if use_latin else s
 
+    city = tr(item.get("City", "").strip())
     street = tr(item.get("Street", "").strip())
     num = tr(item.get("NumHouse", "").strip())
-    city = tr(item.get("City", "").strip())
     name = tr(item.get("Name", "").strip())
 
     queries = []
+    
+    # --- Query generation logic: from most specific to least specific ---
+
+    # 1. All fields: Name, Street, Number, City
+    if name and city and street and num:
+        queries.append((f"{name}, {street} {num}, {city}", True))
+
+    # 2. No Name: Street, Number, City
     if city and street and num:
         queries.append((f"{street} {num}, {city}", True))
+
+    # 3. No Number: Name, Street, City
+    if name and city and street:
+        queries.append((f"{name}, {street}, {city}", True))
+
+    # 4. No Name, No Number: Street, City
     if city and street:
         queries.append((f"{street}, {city}", True))
-    if city and name:
+
+    # 5. No Street info: Name, City
+    if name and city:
         queries.append((f"{name}, {city}", True))
+
+    # 6. Only City (least specific)
     if city:
         queries.append((city, False))
     
-    return queries
+    # Remove duplicates while preserving order
+    unique_queries = []
+    seen = set()
+    for q, flag in queries:
+        if q not in seen:
+            unique_queries.append((q, flag))
+            seen.add(q)
+
+    return unique_queries
 
 def get_coordinates(geocache_cursor: sqlite3.Cursor, item: Dict[str, str]) -> Optional[Tuple[float, float]]:
     """
