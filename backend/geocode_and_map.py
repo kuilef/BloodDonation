@@ -31,8 +31,8 @@ import folium                           # pip install folium
 from geopy.geocoders import GoogleV3
 from geopy.extra.rate_limiter import RateLimiter
 
-GOOGLE_API_KEY = "AIzaSyCczZzPLT6H7e5LMcJwTYCnnQObjtKA4Sk"             # получите в Google Cloud → APIs & Services → Credentials
-geo = GoogleV3(api_key=GOOGLE_API_KEY, timeout=10)
+GOOGLE_API_KEY = "AIzaSyCczZzPLT6H7e5LMcJwTYCnnQObjtKA4Sk"           
+geo = GoogleV3(api_key=GOOGLE_API_KEY)
 
 # у Google нет явного лимита 1 req/s, но чтобы не сжечь квоту — поставим плавный RateLimiter
 rl = RateLimiter(geo.geocode,
@@ -52,57 +52,96 @@ USER_AGENT    = "blood_donation_map/0.1"
 
 # ───── SQLite кэш ───────────────────────────────────────────────────────────
 def init_cache(db: pathlib.Path = CACHE_DB):
+    """Инициализирует базу данных кэша с новой схемой."""
     conn = sqlite3.connect(db)
-    cur  = conn.cursor()
+    cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS geocache (
-            key        TEXT PRIMARY KEY,
+            city       TEXT NOT NULL,
+            street     TEXT NOT NULL,
+            num_house  TEXT NOT NULL,
+            name       TEXT NOT NULL,
             lat        REAL,
             lon        REAL,
-            is_exact   INTEGER,       -- 1 = дом/улица, 0 = только город
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            is_exact   INTEGER,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (city, street, num_house, name)
         )
     """)
     conn.commit()
     return conn
 
 
-def cache_get(cur, key: str) -> Optional[Tuple[float, float, int]]:
-    row = cur.execute("SELECT lat, lon, is_exact FROM geocache WHERE key=?", (key,)).fetchone()
+def cache_get(cur: sqlite3.Cursor, item: Dict[str, str]) -> Optional[Tuple[float, float, int]]:
+    """Ищет запись в кэше по компонентам адреса."""
+    query = "SELECT lat, lon, is_exact FROM geocache WHERE city=? AND street=? AND num_house=? AND name=?"
+    params = (
+        item.get("City", "").strip().lower(),
+        item.get("Street", "").strip().lower(),
+        item.get("NumHouse", "").strip().lower(),
+        item.get("Name", "").strip().lower()
+    )
+    row = cur.execute(query, params).fetchone()
     return row if row else None
 
 
-def cache_put(cur, key: str, lat: float, lon: float, is_exact: bool):
-    cur.execute("""
-        INSERT OR REPLACE INTO geocache (key, lat, lon, is_exact, updated_at)
-        VALUES (?,?,?,?,datetime('now'))
-    """, (key, lat, lon, int(is_exact)))
+def cache_put(cur: sqlite3.Cursor, item: Dict[str, str], lat: float, lon: float, is_exact: bool):
+    """Сохраняет запись в кэш с компонентами адреса."""
+    query = """
+        INSERT OR REPLACE INTO geocache (city, street, num_house, name, lat, lon, is_exact, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    """
+    params = (
+        item.get("City", "").strip().lower(),
+        item.get("Street", "").strip().lower(),
+        item.get("NumHouse", "").strip().lower(),
+        item.get("Name", "").strip().lower(),
+        lat,
+        lon,
+        int(is_exact)
+    )
+    cur.execute(query, params)
 
 
 # ───── построение вариантов запроса ────────────────────────────────────────
-def _queries(item: Dict[str, str], latin: bool = False) -> List[Tuple[str, bool]]:
+def _queries(item: Dict[str, str], latin: bool = False) -> List[str]:
     """
-    Возвращает список (query, is_exact). is_exact==False → центр города.
-    latin=True  → все поля прогоняются через unidecode().
+    Возвращает список запросов от самого подробного к общему.
+    latin=True → все поля прогоняются через unidecode().
     """
-    def tr(s):  # transliterate или оставить как есть
+    def tr(s: str) -> str:  # transliterate или оставить как есть
         return unidecode(s) if latin else s
 
     street = tr(item.get("Street", "").strip())
-    num    = tr(item.get("NumHouse", "").strip())
-    city   = tr(item.get("City", "").strip())
-    name   = tr(item.get("Name", "").strip())
+    num = tr(item.get("NumHouse", "").strip())
+    city = tr(item.get("City", "").strip())
+    name = tr(item.get("Name", "").strip())
 
-    out: List[Tuple[str, bool]] = []
-    if street and num:
-        out.append((f"{street} {num}, {city}", True))
-    if street:
-        out.append((f"{street}, {city}", True))
-    if name:
-        out.append((f"{name}, {city}", True))
-    if city:
-        out.append((city, False))
-    return out
+    # Строим части адреса, только если они не пустые
+    parts = {
+        "name": name,
+        "street": f"{street} {num}".strip() if street and num else street,
+        "city": city,
+    }
+    
+    # Фильтруем пустые части
+    valid_parts = {k: v for k, v in parts.items() if v}
+
+    # Генерируем комбинации, сохраняя порядок
+    queries = []
+    if "name" in valid_parts and "street" in valid_parts and "city" in valid_parts:
+        queries.append(f"{valid_parts['name']}, {valid_parts['street']}, {valid_parts['city']}")
+    if "street" in valid_parts and "city" in valid_parts:
+        queries.append(f"{valid_parts['street']}, {valid_parts['city']}")
+    if "name" in valid_parts and "street" in valid_parts: # Редкий случай, но возможный
+        queries.append(f"{valid_parts['name']}, {valid_parts['street']}")
+    if "name" in valid_parts and "city" in valid_parts:
+        queries.append(f"{valid_parts['name']}, {valid_parts['city']}")
+    if "city" in valid_parts:
+        queries.append(valid_parts['city'])
+
+    # Убираем дубликаты, сохраняя порядок
+    return list(dict.fromkeys(queries))
 
 
 # ───── Nominatim ───────────────────────────────────────────────────────────
@@ -121,19 +160,30 @@ def _queries(item: Dict[str, str], latin: bool = False) -> List[Tuple[str, bool]
 # ───── поиск координат с fallback’ами ──────────────────────────────────────
 def find_coords(item: Dict[str, str]) -> Tuple[Optional[Tuple[float, float]], bool]:
     """
-    ➜ (lat, lon), is_exact
+    Ищет координаты, возвращая (lat, lon) и флаг точного совпадения.
+    Точность определяется на основе location_type ответа Google API.
+    ➜ ((lat, lon), is_exact) | (None, False)
     """
-    # ①-④ + ①-④ латиница
-    for query, exact in _queries(item, latin=False) + _queries(item, latin=True):
-        loc = google_geocode(query)
-        if loc:
-            return (loc.latitude, loc.longitude), exact
-    # Последний шанс – центр города (если не пробовали)
-    city = item.get("City", "").strip()
-    if city:
-        loc = google_geocode(city)
-        if loc:
-            return (loc.latitude, loc.longitude), False
+    # Получаем все возможные запросы (кириллица + латиница)
+    all_queries = _queries(item, latin=False) + _queries(item, latin=True)
+    
+    # Убираем дубликаты после транслитерации, сохраняя порядок
+    unique_queries = list(dict.fromkeys(all_queries))
+
+    for query in unique_queries:
+        try:
+            loc = google_geocode(query)
+            if loc and loc.raw:
+                # IMPORTANT: is_exact определяется по ответу API, а не по типу запроса
+                location_type = loc.raw.get('geometry', {}).get('location_type', 'APPROXIMATE')
+                is_exact = location_type in ['ROOFTOP', 'RANGE_INTERPOLATED']
+                
+                return (loc.latitude, loc.longitude), is_exact
+        except Exception as e:
+            # В случае ошибки от API (например, ZERO_RESULTS), просто переходим к следующему запросу
+            print(f"      [geocode] Info: query '{query}' failed. Reason: {e}")
+            continue
+            
     return None, False
 
 
@@ -150,23 +200,18 @@ def main():
     print(f"{'City':<15} {'Street':<20} {'Name':<25} {'Coords':<20} [Source]")
 
     for it in rows:
-        # ключ кэша – нормализованный адрес
-        key = "|".join([
-            it.get("City", "").strip().lower(),
-            it.get("Street", "").strip().lower(),
-            it.get("NumHouse", "").strip().lower(),
-            it.get("Name", "").strip().lower()
-        ])
-
-        cached = cache_get(cur, key)
+        # Ищем в кэше по компонентам адреса
+        cached = cache_get(cur, it)
         if cached:
             lat, lon, exact = cached
             source = "cache"
         else:
+            # Если не в кэше, ищем через API
             coords, exact = find_coords(it)
             if coords:
                 lat, lon = coords
-                cache_put(cur, key, lat, lon, exact)
+                # Сохраняем в кэш
+                cache_put(cur, it, lat, lon, exact)
                 source = "google"
             else:
                 missing.append(it)
