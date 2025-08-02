@@ -2,6 +2,7 @@
 <html lang="he" data-lang="he">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>תרומות דם - דמו / Blood donation map</title>
 
   <!-- Favicons -->
@@ -17,6 +18,7 @@
   <style>
     /* базовая раскладка */
     html, body, #map { height: 100%; margin: 0; }
+    body { font-size: 16px; }
 
     /* боковая панель закреплена слева */
     #controls {
@@ -126,7 +128,7 @@ let   currentLang = "he";  // стартовый язык
 /*────────────────────  инициализация карты  ────────────────────*/
 const map = L.map("map", { zoomControl: false })
              .setView([31.8, 34.9], 8);
-L.control.zoom({ position: "topright" }).addTo(map);
+L.control.zoom({ position: "bottomright" }).addTo(map);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 }).addTo(map);
@@ -149,8 +151,6 @@ function applyLang(lang) {
 }
 
 function refresh() {
-  if (!API) return;  // убрать, если подключён backend
-
   const q = new URLSearchParams({ donation_date: dateInp.value });
   fetch(`${API}/donations?${q}`)
     .then(r => r.json())
