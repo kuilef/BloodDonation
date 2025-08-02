@@ -98,15 +98,15 @@ def _generate_queries(item: Dict[str, str], use_latin: bool = False) -> List[Tup
 
     # 1. All fields: Name, Street, Number, City
     if name and city and street and num:
-        queries.append((f"{city}, {street} {num}, {name}", True))
+        queries.append((f"{street} {num} {city}, {name}", True))
 
     # 2. No Name: Street, Number, City
     if city and street and num:
-        queries.append((f"{city}, {street} {num}", True))
+        queries.append((f"{street} {num}, {city} ", True))
 
     # 3. No Number: Name, Street, City
     if name and city and street:
-        queries.append((f"{city}, {street}, {name}", True))
+        queries.append((f"{street}, {city}, {name}", True))
 
     # 4. No Name, No Number: Street, City
     if city and street:
@@ -144,8 +144,7 @@ def get_coordinates(geocache_cursor: sqlite3.Cursor, item: Dict[str, str]) -> Op
         return cached_coords
 
     # 2. On cache miss, generate queries and try to geocode
-    # Try Hebrew first, then fall back to Latin (unidecode)
-    all_queries = _generate_queries(item, use_latin=False) + _generate_queries(item, use_latin=True)
+    all_queries = _generate_queries(item, use_latin=False)
 
     for query, is_exact in all_queries:
         if not query or query.strip() == ',':
