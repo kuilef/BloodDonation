@@ -9,14 +9,19 @@
   <style>html,body,#map{height:100%;margin:0}</style>
 </head>
 <body>
-<div id="controls" style="position:absolute;z-index:1000;padding:8px;background:#fff">
-    <h1>תרומות דם - מפה</h1>
+<div id="controls" style="position:absolute;z-index:1000;padding:8px;background:#fff;max-width: 450px;">
+    <div id="lang-switcher" style="text-align: right; margin-bottom: 8px;">
+        <button data-lang="en">En</button>
+        <button data-lang="ru">Ru</button>
+        <button data-lang="he">He</button>
+    </div>
+    <h1 data-i18n="title">תרומות דם - מפה</h1>
     <div class="info-text" style="margin: 1em 0; padding: 1em; background-color: #f8f9fa; border-radius: 5px;">
-        <p>המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד"א. לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד"א.</p>
-        <p><strong>שימו לב:</strong> המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר מד"א.</p>
+        <p data-i18n="info1">המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד"א. לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד"א.</p>
+        <p><strong data-i18n="info2_strong">שימו לב:</strong> <span data-i18n="info2_span">המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר מד"א.</span></p>
     </div>
     <form method="get" action="/" id="date-filter-form" style="margin-bottom: 1em;">
-        <label for="date">הצג תרומות לתאריך:</label>
+        <label for="date" data-i18n="date_label">הצג תרומות לתאריך:</label>
         <input type="date" id="date" name="date">
     </form>
 </div>
@@ -27,35 +32,83 @@
 <script>
 const API = "";
 
+const i18n = {
+    en: {
+        title: "Blood Donations - Map",
+        info1: "The map shows blood donation locations based on data from the MDA website. Clicking on a point will lead to the registration page on the MDA site.",
+        info2_strong: "Please note:",
+        info2_span: "The location on the map may not be exact, please verify on the <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA website</a>.",
+        date_label: "Show donations for date:",
+        register: "Register"
+    },
+    ru: {
+        title: "Донорство крови - Карта",
+        info1: "Карта показывает места сдачи крови на основе данных с сайта MDA. Нажатие на точку приведет на страницу регистрации на сайте MDA.",
+        info2_strong: "Внимание:",
+        info2_span: "Местоположение на карте может быть неточным, пожалуйста, сверяйтесь с сайтом <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA</a>",
+        date_label: "Показать сдачи на дату:",
+        register: "Запись"
+    },
+    he: {
+        title: "תרומות דם - מפה",
+        info1: "המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד\"א. לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד\"א.",
+        info2_strong: "שימו לב:",
+        info2_span: "המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר <a href='https://www.mdais.org/blood-donation' target=\"_blank\">מד\"א</a>.",
+        date_label: "הצג תרומות לתאריך:",
+        register: "להרשמה"
+    }
+};
+let currentLang = 'he';
+
 const map = L.map('map', { zoomControl: false }).setView([31.8, 34.9], 8);
 L.control.zoom({ position: 'topright' }).addTo(map);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            {attribution:'© OpenStreetMap'}).addTo(map);
-
+  { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' })
+  .addTo(map);
 const dateInp = document.getElementById('date');
 dateInp.valueAsDate = new Date(); // сегодня по умолчанию
+
+function updateUI() {
+    const translations = i18n[currentLang];
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (translations[key]) el.innerHTML = translations[key];
+    });
+}
 
 function refresh() {
   const params = new URLSearchParams({ donation_date: dateInp.value });
   fetch(`${API}/donations?`+params)
     .then(r => r.json())
-    .then(points => {
-        markers.clearLayers();
-    // Показываем все точки без фильтрации по городу
-    points.forEach(p => {
+    .then(data => {
+      markers.clearLayers();
+      for (const p of data) {
         const label = `
           <strong>${p.city} ${p.street||''} ${p.num_house||''}</strong><br>
-          ${p.from_hour}&nbsp;–&nbsp;${p.to_hour}<br>
-          <a href="${p.scheduling_url}" target="_blank">להרשמה / запись</a>`;
+          ${p.from_hour} – ${p.to_hour}<br>
+          <a href="${p.scheduling_url}" target="_blank">${i18n[currentLang].register}</a>`;
         L.marker([p.latitude, p.longitude])
           .bindPopup(label)
           .addTo(markers);
-    });
+      }
     });
 }
 
+document.getElementById('lang-switcher').addEventListener('click', (e) => {
+    if (e.target.tagName === 'BUTTON') {
+        const lang = e.target.getAttribute('data-lang');
+        if (lang && i18n[lang]) {
+            currentLang = lang;
+            updateUI();
+            refresh();
+        }
+    }
+});
+
 const markers = L.layerGroup().addTo(map);
 dateInp.onchange = refresh;
+
+updateUI();
 refresh();
 </script>
 </body>
