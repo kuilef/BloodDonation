@@ -1,3 +1,16 @@
+"""
+python -m backend.data_pipeline.run_pipeline
+— создаёт/обновляет donations.db, заполняет данными и кэшем координат.
+
+Запуск сервера
+uvicorn backend.app:app --reload
+
+Открытие интерфейса
+В браузере перейти на http://localhost:8000/ (или соответствующий хост), после чего:
+
+увидеть на карте ближайшие станции и оформить запись.
+"""
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -58,19 +71,6 @@ async def get_donations(
     target_date = donation_date or date.today().isoformat()
     try:
         results = operations.get_donations_by_date(target_date)
-        return results
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
-
-
-@app.get("/cities", summary="Get a list of cities with donations")
-async def get_cities():
-    """
-    Returns a unique, sorted list of cities that have donation stations
-    in the database.
-    """
-    try:
-        results = operations.get_all_cities()
         return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")

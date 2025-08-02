@@ -10,8 +10,15 @@
 </head>
 <body>
 <div id="controls" style="position:absolute;z-index:1000;padding:8px;background:#fff">
-  תאריך: <input type="date" id="date">
-  עיר: <select id="city"><option value="">כל הערים</option></select>
+    <h1>תרומות דם - מפה</h1>
+    <div class="info-text" style="margin: 1em 0; padding: 1em; background-color: #f8f9fa; border-radius: 5px;">
+        <p>המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד"א. לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד"א.</p>
+        <p><strong>שימו לב:</strong> המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר מד"א.</p>
+    </div>
+    <form method="get" action="/" id="date-filter-form" style="margin-bottom: 1em;">
+        <label for="date">הצג תרומות לתאריך:</label>
+        <input type="date" id="date" name="date">
+    </form>
 </div>
 <div id="map"></div>
 
@@ -20,24 +27,13 @@
 <script>
 const API = "";
 
-const map = L.map('map').setView([31.8, 34.9], 8);
+const map = L.map('map', { zoomControl: false }).setView([31.8, 34.9], 8);
+L.control.zoom({ position: 'topright' }).addTo(map);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
             {attribution:'© OpenStreetMap'}).addTo(map);
 
-const citySel = document.getElementById('city');
 const dateInp = document.getElementById('date');
-dateInp.valueAsDate = new Date();            // сегодня по умолчанию
-
-fetch(`${API}/cities`)
-  .then(r => r.json())
-  .then(cities => {
-      cities.forEach(({city}) => {
-          const o = document.createElement('option');
-          o.value = city;
-          o.textContent = city;
-          citySel.appendChild(o);
-      });
-  });
+dateInp.valueAsDate = new Date(); // сегодня по умолчанию
 
 function refresh() {
   const params = new URLSearchParams({ donation_date: dateInp.value });
@@ -59,7 +55,7 @@ function refresh() {
 }
 
 const markers = L.layerGroup().addTo(map);
-dateInp.onchange = citySel.onchange = refresh;
+dateInp.onchange = refresh;
 refresh();
 </script>
 </body>
