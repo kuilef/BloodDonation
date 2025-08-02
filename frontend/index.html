@@ -16,45 +16,30 @@
         crossorigin=""/>
 
   <style>
-    /* базовая раскладка */
     html, body, #map { height: 100%; margin: 0; }
     body { font-size: 16px; }
 
-    /* боковая панель закреплена слева */
-    #controls {
-      position: absolute;
-      left: 0;
-      right: auto;
-      z-index: 1000;
-      max-width: 450px;
-      padding: 8px;
-      background: #fff;
+    /* боковая панель                                                         */
+    #controls{
+      position:absolute; left:0; right:auto;
+      z-index:1000; max-width:450px; padding:8px; background:#fff;
     }
+    #lang-switcher{ text-align:left; margin-bottom:8px; }
 
-    /* переключатель языков всегда слева */
-    #lang-switcher {
-      text-align: left;
-      margin-bottom: 8px;
-    }
-
-    /* rtl-правила для иврита */
+    /* RTL-правила для иврита                                                 */
     [data-lang="he"] .info-text,
     [data-lang="he"] #controls h1,
-    [data-lang="he"] #controls label {
-      direction: rtl;
-      text-align: right;
+    [data-lang="he"] #controls label{
+      direction:rtl; text-align:right;
     }
 
-    /* расположение подписи и календаря */
-    #date-filter-form {
-      display: flex;
-      flex-direction: row;      /* En/Ru: label → input  */
-      gap: .5em;
-      align-items: center;
-    }
-    [data-lang="he"] #date-filter-form {
-      flex-direction: row-reverse;  /* He: input ← label   */
-    }
+    /* label ↔ input                                                          */
+    #date-filter-form{ display:flex; flex-direction:row; gap:.5em; align-items:center; }
+    [data-lang="he"] #date-filter-form{ flex-direction:row-reverse; }
+
+    /* лёгкий стиль ссылки в атрибуции                                        */
+    .leaflet-control-attribution .contact-link{ text-decoration:none; }
+    .leaflet-control-attribution .contact-link:hover{ text-decoration:underline; }
   </style>
 </head>
 <body>
@@ -93,92 +78,109 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 
 <script>
-/*────────────────────  i18n словарь  ────────────────────*/
+/*──────────────────────────────  словарь i18n  ─────────────────────────────*/
 const i18n = {
-  en: {
-    title: "Blood Donations - Map",
-    info1: "The map shows blood donation locations based on data from the MDA website. Clicking on a point will lead to the registration page on the MDA site.",
-    info2_strong: "Please note:",
-    info2_span: "The location on the map may not be exact, please verify on the <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA website</a>.",
-    date_label: "Show donations for date:",
-    register: "Register"
+  en:{
+    title:"Blood Donations - Map",
+    info1:"The map shows blood donation locations based on data from the MDA website. Clicking on a point will lead to the registration page on the MDA site.",
+    info2_strong:"Please note:",
+    info2_span:"The location on the map may not be exact, please verify on the <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA website</a>.",
+    date_label:"Show donations for date:",
+    register:"Register"
   },
-  ru: {
-    title: "Донорство крови - Карта",
-    info1: "Карта показывает места сдачи крови на основе данных с сайта MDA. Нажатие на точку приведёт на страницу регистрации на сайте MDA.",
-    info2_strong: "Внимание:",
-    info2_span: "Местоположение на карте может быть неточным, пожалуйста, сверяйтесь с сайтом <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA</a>.",
-    date_label: "Показать сдачи на дату:",
-    register: "Запись"
+  ru:{
+    title:"Донорство крови - Карта",
+    info1:"Карта показывает места сдачи крови на основе данных с сайта MDA. Нажатие на точку приведёт на страницу регистрации на сайте MDA.",
+    info2_strong:"Внимание:",
+    info2_span:"Местоположение на карте может быть неточным, пожалуйста, сверяйтесь с сайтом <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA</a>.",
+    date_label:"Показать сдачи на дату:",
+    register:"Запись"
   },
-  he: {
-    title: "תרומות דם - מפה",
-    info1: "המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד\"א. לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד\"א.",
-    info2_strong: "שימו לב:",
-    info2_span: "המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר <a href='https://www.mdais.org/blood-donation' target='_blank'>מד\"א</a>.",
-    date_label: "הצג תרומות לתאריך:",
-    register: "להרשמה"
+  he:{
+    title:"תרומות דם - מפה",
+    info1:"המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד\"א. לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד\"א.",
+    info2_strong:"שימו לב:",
+    info2_span:"המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר <a href='https://www.mdais.org/blood-donation' target='_blank'>מד\"א</a>.",
+    date_label:"הצג תרומות לתאריך:",
+    register:"להרשמה"
   }
 };
 
-/*────────────────────  глобальные переменные  ────────────────────*/
-const API         = "";    // при необходимости укажите backend
-let   currentLang = "he";  // стартовый язык
+/*───────────────────────────  надпись «Связь» в атрибуции  ─────────────────*/
+const contactAttr = {
+  en:'• <a href="mailto:kuilef42+blood@gmail.com" class="contact-link">Contact</a>',
+  ru:'• <a href="mailto:kuilef42+blood@gmail.com" class="contact-link">Связь</a>',
+  he:'• <a href="mailto:kuilef42+blood@gmail.com" class="contact-link">יצירת קשר</a>'
+};
 
-/*────────────────────  инициализация карты  ────────────────────*/
-const map = L.map("map", { zoomControl: false })
-             .setView([31.8, 34.9], 8);
-L.control.zoom({ position: "bottomright" }).addTo(map);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+const API = "/";                       // URL вашего backend’а
+let currentLang = "he";
+let lastContactAttr = contactAttr[currentLang];
+
+/*─────────────────────────────  инициализация карты  ───────────────────────*/
+const map = L.map("map",{ zoomControl:false }).setView([31.8,34.9],8);
+L.control.zoom({ position:"bottomright" }).addTo(map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 }).addTo(map);
+
+/* добавляем контактную ссылку к атрибуции */
+map.attributionControl.addAttribution(lastContactAttr);
 
 const markers = L.layerGroup().addTo(map);
 const dateInp = document.getElementById("date");
-dateInp.valueAsDate = new Date();  // сегодня по умолчанию
+dateInp.valueAsDate = new Date();
 
-/*────────────────────  функции  ────────────────────*/
-function applyLang(lang) {
+/*──────────────────────────────  функции  ─────────────────────────────────*/
+function applyLang(lang){
   currentLang = lang;
   document.documentElement.lang = lang;
   document.documentElement.setAttribute("data-lang", lang);
 
+  /* переводим все элементы */
   const t = i18n[lang];
-  document.querySelectorAll("[data-i18n]").forEach(el => {
-    const key = el.dataset.i18n;
-    if (t[key]) el.innerHTML = t[key];
+  document.querySelectorAll("[data-i18n]").forEach(el=>{
+    const k = el.dataset.i18n;
+    if(t[k]) el.innerHTML = t[k];
   });
+
+  /* заменяем контакт в атрибуции */
+  map.attributionControl.removeAttribution(lastContactAttr);
+  lastContactAttr = contactAttr[lang];
+  map.attributionControl.addAttribution(lastContactAttr);
 }
 
-function refresh() {
-  const q = new URLSearchParams({ donation_date: dateInp.value });
+function refresh(){
+  if(!API) return;               // уберите проверку, если API обязателен
+  const q = new URLSearchParams({ donation_date:dateInp.value });
   fetch(`${API}/donations?${q}`)
-    .then(r => r.json())
-    .then(list => {
+    .then(r=>r.json())
+    .then(list=>{
       markers.clearLayers();
-      list.forEach(p => {
+      list.forEach(p=>{
         const html = `
           <strong>${p.name}</strong><br>
-          ${p.city} ${p.street || ""} ${p.num_house || ""}<br>
+          ${p.city} ${p.street||""} ${p.num_house||""}<br>
           ${p.from_hour}&nbsp;–&nbsp;${p.to_hour}<br>
           <a href="${p.scheduling_url}" target="_blank">${i18n[currentLang].register}</a>`;
-        L.marker([p.latitude, p.longitude]).bindPopup(html).addTo(markers);
+        L.marker([p.latitude,p.longitude]).bindPopup(html).addTo(markers);
       });
     });
 }
 
-/*────────────────────  обработка событий  ────────────────────*/
-document.getElementById("lang-switcher").addEventListener("click", e => {
-  if (e.target.matches("button[data-lang]")) {
+/*──────────────────────────────  события  ─────────────────────────────────*/
+document.getElementById("lang-switcher").addEventListener("click", e=>{
+  if(e.target.matches("button[data-lang]")){
     const lang = e.target.dataset.lang;
-    if (i18n[lang]) { applyLang(lang); refresh(); }
+    if(i18n[lang]){ applyLang(lang); refresh(); }
   }
 });
 dateInp.addEventListener("change", refresh);
 
-/*────────────────────  запуск  ────────────────────*/
+/*──────────────────────────────  запуск  ─────────────────────────────────*/
 applyLang(currentLang);
-refresh();               // если есть backend
+refresh();                          /* запрос к API */
 </script>
 </body>
 </html>
+
