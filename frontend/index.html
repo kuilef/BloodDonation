@@ -84,7 +84,8 @@ function refresh() {
       markers.clearLayers();
       for (const p of data) {
         const label = `
-          <strong>${p.city} ${p.street||''} ${p.num_house||''}</strong><br>
+          <strong>${p.name}</strong><br>
+          ${p.city} ${p.street||''} ${p.num_house||''}<br>
           ${p.from_hour} – ${p.to_hour}<br>
           <a href="${p.scheduling_url}" target="_blank">${i18n[currentLang].register}</a>`;
         L.marker([p.latitude, p.longitude])

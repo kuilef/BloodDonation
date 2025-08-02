@@ -98,23 +98,23 @@ def _generate_queries(item: Dict[str, str], use_latin: bool = False) -> List[Tup
 
     # 1. All fields: Name, Street, Number, City
     if name and city and street and num:
-        queries.append((f"{name}, {street} {num}, {city}", True))
+        queries.append((f"{city}, {street} {num}, {name}", True))
 
     # 2. No Name: Street, Number, City
     if city and street and num:
-        queries.append((f"{street} {num}, {city}", True))
+        queries.append((f"{city}, {street} {num}", True))
 
     # 3. No Number: Name, Street, City
     if name and city and street:
-        queries.append((f"{name}, {street}, {city}", True))
+        queries.append((f"{city}, {street}, {name}", True))
 
     # 4. No Name, No Number: Street, City
     if city and street:
-        queries.append((f"{street}, {city}", True))
+        queries.append((f"{city}, {street}", True))
 
     # 5. No Street info: Name, City
     if name and city:
-        queries.append((f"{name}, {city}", True))
+        queries.append((f"{city}, {name}", True))
 
     # 6. Only City (least specific)
     if city:
