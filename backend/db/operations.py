@@ -37,7 +37,7 @@ def get_all_cities() -> List[Dict[str, Any]]:
     cursor = conn.cursor()
     # Query for distinct cities, ordering by the Hebrew name
     cursor.execute("""
-        SELECT DISTINCT city, city_english
+        SELECT DISTINCT city
         FROM donations
         ORDER BY city
     """)

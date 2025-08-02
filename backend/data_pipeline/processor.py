@@ -3,7 +3,6 @@ import sqlite3
 import pathlib
 import json
 import re
-from unidecode import unidecode
 
 # Instead of custom geocoder, use unified Google API logic
 from ..geocode_and_map import find_coords
@@ -99,14 +98,12 @@ def insert_donation(conn: sqlite3.Connection, record: dict):
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO donations (
-            donation_date, city, city_english, street, street_english,
-            num_house, name, name_english, from_hour, to_hour,
+            donation_date, city, street, num_house, name, from_hour, to_hour,
             scheduling_url, latitude, longitude
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        record['donation_date'], record['city'], record['city_english'],
-        record['street'], record['street_english'], record['num_house'],
-        record['name'], record['name_english'], record['from_hour'],
+        record['donation_date'], record['city'], record['street'],
+        record['num_house'], record['name'], record['from_hour'],
         record['to_hour'], record['scheduling_url'], record['latitude'],
         record['longitude']
     ))
@@ -150,12 +147,9 @@ def run_processor():
             record = {
                 'donation_date': station['DateDonation'].split('T')[0],
                 'city': city,
-                'city_english': unidecode(city),
                 'street': street,
-                'street_english': unidecode(street),
                 'num_house': station.get('NumHouse', '').strip(),
                 'name': name,
-                'name_english': unidecode(name),
                 'from_hour': station['FromHour'],
                 'to_hour': station['ToHour'],
                 'scheduling_url': station['SchedulingURL'],

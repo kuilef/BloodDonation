@@ -22,8 +22,8 @@ from .db import operations
 from .db.schema import DONATIONS_DB_PATH
 
 app = FastAPI(
-    title="Blood Donation Map API",
-    description="API for finding blood donation stations in Israel.",
+    title="Blood Donation Map",
+    description="Find blood donation stations in Israel.",
     version="1.0.0",
 )
 
