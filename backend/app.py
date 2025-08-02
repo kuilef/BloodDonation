@@ -37,10 +37,6 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-
-
-
-
 @app.on_event("startup")
 async def startup_event():
     """Check for database on startup."""
