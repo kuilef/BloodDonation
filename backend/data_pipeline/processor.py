@@ -119,7 +119,7 @@ def run_processor():
     geocache_conn = sqlite3.connect(GEOCACHE_DB_PATH)
     geocache_cursor = geocache_conn.cursor()
 
-    mda_stations = fetch_mda_data(limit=100)
+    mda_stations = fetch_mda_data(limit=None)
     if not mda_stations:
         print("[Processor] No data fetched. Aborting pipeline.")
         donations_conn.close()
