@@ -38,13 +38,8 @@ app.add_middleware(
 )
 
 
-# Serve the frontend
-@app.get("/", response_class=FileResponse)
-async def read_root():
-    return "frontend/index.html"
-
-
-app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
+# Serve the frontend, including index.html and other assets like favicons
+app.mount("/", StaticFiles(directory="frontend", html=True), name="static")
 
 
 @app.on_event("startup")
