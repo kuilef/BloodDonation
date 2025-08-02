@@ -1,0 +1,63 @@
+version: "3.8"
+
+#############################
+# BloodDonation – Production
+# обновление данных: 1 раз в неделю
+#############################
+
+services:
+  # ──────────────────────────
+  # REST API + static frontend
+  # ──────────────────────────
+  api:
+    build: .
+    env_file: .env              
+    volumes:
+      - db:/data                
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/donations"]
+      interval: 1m
+      retries: 3
+
+  # ──────────────────────────
+  # Еженедельный ETL-pipeline
+  # ──────────────────────────
+  pipeline:
+    build: .
+    env_file: .env
+    volumes:
+      - db:/data
+    command: >
+      bash -c "
+        while true; do
+          echo '[Pipeline] ─── $(date -u) ─ start' &&
+          python -m backend.data_pipeline.run_pipeline &&
+          echo '[Pipeline] ─── $(date -u) ─ finish; sleeping 7 days' &&
+          sleep 604800;       # 7×24×60×60
+        done"
+    restart: unless-stopped
+
+  # ──────────────────────────
+  # HTTPS-прокси + статик
+  # ──────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+# ──────────────
+# Persisted data
+# ──────────────
+volumes:
+  db:
+  caddy_data:
+  caddy_config:
