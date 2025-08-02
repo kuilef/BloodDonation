@@ -2,9 +2,8 @@ import sqlite3
 import time
 import os
 from typing import Dict, Tuple, List, Optional
+import requests
 
-from geopy.geocoders import GoogleV3
-from geopy.extra.rate_limiter import RateLimiter
 from unidecode import unidecode
 
 # The Google API key is loaded from an environment variable for security.
@@ -13,14 +12,49 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     raise ValueError("GOOGLE_API_KEY environment variable not found.")
 
-geo = GoogleV3(api_key=GOOGLE_API_KEY, timeout=10)
 
-# Rate limiter to avoid burning through API quota
-rl = RateLimiter(geo.geocode, min_delay_seconds=0.1, max_retries=2, error_wait_seconds=2.0)
+def google_geocode(q: str) -> Optional[Tuple[float, float]]:
+    """Geocodes a query string using Google Places API Text Search.
 
-def google_geocode(q: str):
-    """Geocodes a query string using GoogleV3, limited to Israel."""
-    return rl(q, components={"country": "IL"}, language="iw")
+    This method is preferred for free-form or descriptive queries 
+    (e.g., 'near the park entrance') as it can provide more accurate results
+    than standard address geocoding.
+
+    Args:
+        q: The query string to geocode.
+
+    Returns:
+        A tuple of (latitude, longitude) if found, otherwise None.
+    """
+    params = {
+        'query': q,
+        'key': GOOGLE_API_KEY,
+        'language': 'iw',
+        'region': 'IL'  # Bias results to Israel for relevance
+    }
+    try:
+        response = requests.get(
+            'https://maps.googleapis.com/maps/api/place/textsearch/json',
+            params=params,
+            timeout=5  # Set a timeout for network robustness
+        )
+        response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
+        data = response.json()
+
+        if data.get('status') == 'OK' and data.get('results'):
+            location = data['results'][0]['geometry']['location']
+            return location['lat'], location['lng']
+        else:
+            # Log non-OK status for debugging, e.g., ZERO_RESULTS
+            print(f"    [Geocoder] API returned status: {data.get('status')} for query: '{q}'")
+            return None
+
+    except requests.exceptions.RequestException as e:
+        print(f"    [Geocoder] HTTP Request failed: {e}")
+    except (KeyError, IndexError) as e:
+        print(f"    [Geocoder] Failed to parse API response: {e}")
+    
+    return None
 
 def get_from_cache(cur: sqlite3.Cursor, key: str) -> Optional[Tuple[float, float]]:
     """Retrieves coordinates from the geocache database if the key exists."""
@@ -116,16 +150,21 @@ def get_coordinates(geocache_cursor: sqlite3.Cursor, item: Dict[str, str]) -> Op
     for query, is_exact in all_queries:
         if not query or query.strip() == ',':
             continue
-        
+
         print(f"    [Geocoder] Cache miss for '{address_key}'. Querying Google API with: '{query}'")
-        location = google_geocode(query)
         
-        if location:
-            lat, lon = location.latitude, location.longitude
+        # The geocode function now returns a tuple (lat, lon) or None
+        coords = google_geocode(query)
+        
+        if coords:
+            lat, lon = coords
             # Save to cache for next time
             save_to_cache(geocache_cursor, address_key, lat, lon, is_exact)
             print(f"    [Geocoder] Found and cached: ({lat:.5f}, {lon:.5f})")
             return lat, lon
+        
+        # Wait a bit before the next query to avoid hitting API rate limits
+        time.sleep(0.1)
             
     # 3. If all attempts fail
     return None
