@@ -1,5 +1,5 @@
 :8080 {
     root * /usr/share/caddy
     file_server
-reverse_proxy /donations* api:8000
+    reverse_proxy /donations* api:8000
 }
