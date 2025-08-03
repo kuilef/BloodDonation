@@ -1,6 +1,6 @@
 #############################
 # BloodDonation – Production
-# обновление данных: 1 раз в неделю
+# обновление данных: 1 раз в 5 дней
 #############################
 
 services:
@@ -9,7 +9,7 @@ services:
   # ──────────────────────────
   api:
     build: .
-    env_file: .env              
+    env_file: .env
     volumes:
       - ./backend/db:/data
     restart: unless-stopped
@@ -22,6 +22,8 @@ services:
   # Еженедельный ETL-pipeline
   # ──────────────────────────
   pipeline:
+    environment:
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
     build: .
     env_file: .env
     volumes:
@@ -32,7 +34,7 @@ services:
           echo '[Pipeline] ─── $$(date -u) ─ start' &&
           python -m backend.data_pipeline.run_pipeline &&
           echo '[Pipeline] ─── $$(date -u) ─ finish; sleeping 7 days' &&
-          sleep 604800;       # 7×24×60×60
+          sleep 604800;       # 5×24×60×60
         done"
     restart: unless-stopped
 
