@@ -166,7 +166,7 @@ This project is released under the MIT License. See [LICENSE](LICENSE) for detai
 
 ## Acknowledgements
 
-- [Magen David Adom (MDA)](https://www.mdais.org) public API
+- [Magen David Adom (MDA)](https://www.mdais.org)
 - [Google Places API](https://developers.google.com/maps/documentation/places)
 - [Leaflet.js](https://leafletjs.com)
 - [OpenStreetMap](https://www.openstreetmap.org)
