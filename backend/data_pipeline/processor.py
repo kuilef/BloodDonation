@@ -8,75 +8,26 @@ import re
 from .geocoder import get_coordinates
 from ..db.schema import DONATIONS_DB_PATH, GEOCACHE_DB_PATH
 
-MDA_API_URL = "https://www.mdais.org/umbraco/api/invoker/execute"
-LANDING_URL = "https://www.mdais.org/blood-donation"
+MDA_API_URL = "https://mda-browser.kuilef42.workers.dev?date=latest"
+# LANDING_URL = "https://www.mdais.org/blood-donation"
 
 
 def fetch_mda_data(limit: int | None = 10) -> list:
     """
-    Fetches donation station data from the MDA public API.
-    First visits the landing page to obtain cookies and CSRF token, then posts to the API.
-    Returns only the first `limit` records.
+    Получает расписание через Cloudflare-Worker.
+    Возвращает первые `limit` записей (или все, если limit=None).
     """
-    print("[Processor] Fetching data from MDA API...")
-
-    # 1. Open session and visit landing page to get cookies and CSRF
-    session = requests.Session()
+    print("[Processor] Fetching data from Worker…")
     try:
-        landing = session.get(LANDING_URL, timeout=10)
-        landing.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[Processor] ERROR: Failed to load landing page: {e}")
-        return []
-
-    # 2. Extract CSRF token if present
-    csrf_token = None
-    match = re.search(r'name="__RequestVerificationToken"\s+value="([^\"]+)"', landing.text)
-    if match:
-        csrf_token = match.group(1)
-
-    # 3. Prepare headers for API call
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/plain, */*",
-        "Origin": "https://www.mdais.org",
-        "Referer": LANDING_URL,
-        "X-Requested-With": "XMLHttpRequest",
-    }
-    if csrf_token:
-        headers["__RequestVerificationToken"] = csrf_token
-
-    # 4. Prepare payload
-    payload = {
-        "RequestHeader": {
-            "Application": 101,
-            "Module": "BloodBank",
-            "Function": "GetAllDetailsDonations",
-            "Token": ""
-        },
-        "RequestData": ""
-    }
-
-    # 5. Perform API request
-    try:
-        response = session.post(MDA_API_URL, headers=headers, json=payload, timeout=30)
-        print(f"[Processor] API status: {response.status_code}")
-        print(f"[Processor] API response body: {response.text[:200]}…")
-        response.raise_for_status()
-
-        data = response.json()
-        if data and data.get("Result"):
-            donations = json.loads(data["Result"])
-            if limit is not None:
-                donations = donations[:limit]
-            print(f"[Processor] Successfully fetched and parsed {len(donations)} records (limit {limit}).")
-            return donations
-        else:
-            print("[Processor] ERROR: 'Result' field missing or empty.")
-            return []
-
+        resp = requests.get(MDA_API_URL, timeout=15)
+        resp.raise_for_status()
+        donations = resp.json()          # Worker отдаёт уже готовый JSON-массив
+        if limit is not None:
+            donations = donations[:limit]
+        print(f"[Processor] Got {len(donations)} records (limit {limit}).")
+        return donations
     except (requests.RequestException, json.JSONDecodeError) as e:
-        print(f"[Processor] ERROR: API request failed: {e}")
+        print(f"[Processor] ERROR: fetch failed: {e}")
         return []
 
 
