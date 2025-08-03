@@ -1,5 +1,3 @@
-version: "3.8"
-
 #############################
 # BloodDonation – Production
 # обновление данных: 1 раз в неделю
@@ -46,10 +44,12 @@ services:
     depends_on:
       - api
     ports:
-      - "80:80"
-      - "443:443"
+      #- "80:80"
+      #- "443:443"
+      - "8080:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend:/usr/share/caddy
       - caddy_data:/data
       - caddy_config:/config
     restart: unless-stopped
