@@ -140,7 +140,7 @@ const contactAttr = {
   he:'• <a href="#" id="contact-link" class="contact-link">יצירת קשר</a>'
 };
 
-const API = "/";                       // URL вашего backend’а
+const API = "";                       // URL вашего backend’а
 let currentLang = "he";
 let lastContactAttr = contactAttr[currentLang];
 
@@ -181,7 +181,6 @@ function applyLang(lang){
 
 
 function refresh(){
-  if(!API) return;               // уберите проверку, если API обязателен
   const q = new URLSearchParams({ donation_date:dateInp.value });
   fetch(`${API}/donations?${q}`)
     .then(r=>r.json())
