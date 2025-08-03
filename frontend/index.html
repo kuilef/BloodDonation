@@ -40,6 +40,33 @@
     /* лёгкий стиль ссылки в атрибуции                                        */
     .leaflet-control-attribution .contact-link{ text-decoration:none; }
     .leaflet-control-attribution .contact-link:hover{ text-decoration:underline; }
+
+    .contact-popup {
+      display: none;
+      position: fixed;
+      right: 16px;
+      bottom: 48px;
+      z-index: 2000;
+      background: #fff;
+      border: 1px solid #bbb;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px #0002;
+      padding: 1em 1.5em;
+      min-width: 220px;
+      font-size: 1em;
+    }
+    .contact-popup.active { display: block; }
+    .contact-popup-close {
+      position: absolute;
+      top: 6px;
+      right: 10px;
+      background: none;
+      border: none;
+      font-size: 1.2em;
+      cursor: pointer;
+      color: #888;
+    }
+
   </style>
 </head>
 <body>
@@ -108,9 +135,9 @@ const i18n = {
 
 /*───────────────────────────  надпись «Связь» в атрибуции  ─────────────────*/
 const contactAttr = {
-  en:'• <a href="mailto:kuilef42+blood@gmail.com" class="contact-link">Contact</a>',
-  ru:'• <a href="mailto:kuilef42+blood@gmail.com" class="contact-link">Связь</a>',
-  he:'• <a href="mailto:kuilef42+blood@gmail.com" class="contact-link">יצירת קשר</a>'
+  en:'• <a href="#" id="contact-link" class="contact-link">Contact</a>',
+  ru:'• <a href="#" id="contact-link" class="contact-link">Связь</a>',
+  he:'• <a href="#" id="contact-link" class="contact-link">יצירת קשר</a>'
 };
 
 const API = "/";                       // URL вашего backend’а
@@ -148,7 +175,10 @@ function applyLang(lang){
   map.attributionControl.removeAttribution(lastContactAttr);
   lastContactAttr = contactAttr[lang];
   map.attributionControl.addAttribution(lastContactAttr);
+
+  attachContactHandler();
 }
+
 
 function refresh(){
   if(!API) return;               // уберите проверку, если API обязателен
@@ -179,7 +209,58 @@ dateInp.addEventListener("change", refresh);
 
 /*──────────────────────────────  запуск  ─────────────────────────────────*/
 applyLang(currentLang);
-refresh();                          /* запрос к API */
+refresh();  
+
+/*─────────────────────────────  контактный popup  ─────────────────────────*/
+// Добавим popup в body
+const popup = document.createElement("div");
+popup.className = "contact-popup";
+popup.innerHTML = `
+  <button class="contact-popup-close" title="Close">&times;</button>
+  <div style="margin-bottom:0.5em"><strong>Contact</strong></div>
+  <div>
+    <a href="mailto:kuilef42+blood@gmail.com">kuilef42+blood@gmail.com</a><br>
+    <a href="https://t.me/kuilef" target="_blank">Telegram: @kuilef</a>
+  </div>
+`;
+document.body.appendChild(popup);
+
+// Функция для показа popup
+function showContactPopup() {
+  popup.classList.add("active");
+}
+// Функция для скрытия popup
+function hideContactPopup() {
+  popup.classList.remove("active");
+}
+
+// Делегируем обработчик на карту, чтобы ловить появление новой ссылки
+map.on("layeradd", attachContactHandler);
+map.on("layerremove", attachContactHandler);
+attachContactHandler();
+
+function attachContactHandler() {
+  setTimeout(()=>{
+    const link = document.getElementById("contact-link");
+    if(link){
+      link.onclick = (e)=>{
+        e.preventDefault();
+        showContactPopup();
+      };
+    }
+  }, 100);
+}
+
+// Закрытие popup по крестику
+popup.querySelector(".contact-popup-close").onclick = hideContactPopup;
+
+// Закрытие popup по клику вне окна
+document.addEventListener("mousedown", function(e){
+  if(popup.classList.contains("active") && !popup.contains(e.target) && !e.target.classList.contains("contact-link")){
+    hideContactPopup();
+  }
+});
+
 </script>
 </body>
 </html>
