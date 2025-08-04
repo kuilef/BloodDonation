@@ -1,5 +1,10 @@
-:8080 {
+tirmudam.org {
     root * /usr/share/caddy
     file_server
     reverse_proxy /donations* api:8000
+    encode gzip zstd
+    log {
+        output stdout
+        format console
+    }
 }
