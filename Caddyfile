@@ -3,8 +3,4 @@ tirmudam.org {
     file_server
     reverse_proxy /donations* api:8000
     encode gzip zstd
-    log {
-        output stdout
-        format console
-    }
 }
