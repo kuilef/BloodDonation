@@ -19,27 +19,30 @@
     html, body, #map { height: 100%; margin: 0; }
     body { font-size: 16px; }
 
-    /* боковая панель                                                         */
     #controls{
       position:absolute; left:0; right:auto;
       z-index:1000; max-width:450px; padding:8px; background:#fff;
     }
     #lang-switcher{ text-align:left; margin-bottom:8px; }
 
-    /* RTL-правила для иврита                                                 */
     [data-lang="he"] .info-text,
     [data-lang="he"] #controls h1,
     [data-lang="he"] #controls label{
       direction:rtl; text-align:right;
     }
 
-    /* label ↔ input                                                          */
     #date-filter-form{ display:flex; flex-direction:row; gap:.5em; align-items:center; }
     [data-lang="he"] #date-filter-form{ flex-direction:row-reverse; }
 
-    /* лёгкий стиль ссылки в атрибуции                                        */
     .leaflet-control-attribution .contact-link{ text-decoration:none; }
     .leaflet-control-attribution .contact-link:hover{ text-decoration:underline; }
+
+    .info-text {
+      margin: 1em 0;
+      padding: 1em;
+      background: #f8f9fa;
+      border-radius: 5px;
+    }
 
     .contact-popup {
       display: none;
@@ -67,11 +70,69 @@
       color: #888;
     }
 
+    #toggle-controls {
+      display: none;
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 1001;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px;
+      line-height: 1;
+    }
+    #toggle-controls svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    /* Медиа-запрос для мобильных устройств */
+    @media (max-width: 767px) {
+      /* Показываем кнопку-стрелку */
+      #toggle-controls {
+        display: block;
+      }
+
+      /* Скрываем текстовый блок по умолчанию */
+      #controls .info-text {
+        max-height: 0;
+        overflow: hidden;
+        padding-top: 0;
+        padding-bottom: 0;
+        margin-top: 0;
+        margin-bottom: 0;
+        transition: all 0.3s ease-in-out;
+        background: none;
+        border-radius: 0;
+        border: none;
+        box-shadow: none; 
+      }
+
+      #controls.expanded .info-text {
+        max-height: 300px;
+        padding: 1em;
+        margin: 1em 0;
+      }
+
+      #toggle-controls .arrow-up { display: none; }
+      #toggle-controls .arrow-down { display: block; }
+
+      #controls.expanded #toggle-controls .arrow-up { display: block; }
+      #controls.expanded #toggle-controls .arrow-down { display: none; }
+    }
+
   </style>
 </head>
 <body>
 
 <div id="controls">
+  <!-- НОВОЕ: Кнопка для сворачивания/разворачивания -->
+  <button id="toggle-controls" aria-label="Toggle info panel">
+    <svg class="arrow-down" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5H7z" fill="currentColor"></path></svg>
+    <svg class="arrow-up" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 15l5-5 5 5H7z" fill="currentColor"></path></svg>
+  </button>
+
   <div id="lang-switcher">
     <button data-lang="en">En</button>
     <button data-lang="ru">Ru</button>
@@ -80,7 +141,7 @@
 
   <h1 data-i18n="title">תרומות דם - מפה</h1>
 
-  <div class="info-text" style="margin:1em 0;padding:1em;background:#f8f9fa;border-radius:5px;">
+  <div class="info-text">
     <p data-i18n="info1">
       המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד״א.
       לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד״א.
@@ -108,7 +169,7 @@
 /*──────────────────────────────  словарь i18n  ─────────────────────────────*/
 const i18n = {
   en:{
-    title:"Blood Donations - Map",
+    title:"Blood Donations",
     info1:"The map shows blood donation locations based on data from the MDA website. Clicking on a point will lead to the registration page on the MDA site.",
     info2_strong:"Please note:",
     info2_span:"The location on the map may not be exact, please verify on the <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA website</a>.",
@@ -116,7 +177,7 @@ const i18n = {
     register:"Register"
   },
   ru:{
-    title:"Донорство крови - Карта",
+    title:"Донорство крови",
     info1:"Карта показывает места сдачи крови на основе данных с сайта MDA. Нажатие на точку приведёт на страницу регистрации на сайте MDA.",
     info2_strong:"Внимание:",
     info2_span:"Местоположение на карте может быть неточным, пожалуйста, сверяйтесь с сайтом <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA</a>.",
@@ -151,7 +212,6 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
   attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 }).addTo(map);
 
-/* добавляем контактную ссылку к атрибуции */
 map.attributionControl.addAttribution(lastContactAttr);
 
 const markers = L.layerGroup().addTo(map);
@@ -164,14 +224,12 @@ function applyLang(lang){
   document.documentElement.lang = lang;
   document.documentElement.setAttribute("data-lang", lang);
 
-  /* переводим все элементы */
   const t = i18n[lang];
   document.querySelectorAll("[data-i18n]").forEach(el=>{
     const k = el.dataset.i18n;
     if(t[k]) el.innerHTML = t[k];
   });
 
-  /* заменяем контакт в атрибуции */
   map.attributionControl.removeAttribution(lastContactAttr);
   lastContactAttr = contactAttr[lang];
   map.attributionControl.addAttribution(lastContactAttr);
@@ -206,12 +264,17 @@ document.getElementById("lang-switcher").addEventListener("click", e=>{
 });
 dateInp.addEventListener("change", refresh);
 
-/*──────────────────────────────  запуск  ─────────────────────────────────*/
-applyLang(currentLang);
-refresh();  
+const controlsPanel = document.getElementById('controls');
+const toggleButton = document.getElementById('toggle-controls');
 
-/*─────────────────────────────  контактный popup  ─────────────────────────*/
-// Добавим popup в body
+toggleButton.addEventListener('click', () => {
+  controlsPanel.classList.toggle('expanded');
+});
+
+
+applyLang(currentLang);
+refresh();
+
 const popup = document.createElement("div");
 popup.className = "contact-popup";
 popup.innerHTML = `
@@ -224,11 +287,9 @@ popup.innerHTML = `
 `;
 document.body.appendChild(popup);
 
-// Функция для показа popup
 function showContactPopup() {
   popup.classList.add("active");
 }
-// Функция для скрытия popup
 function hideContactPopup() {
   popup.classList.remove("active");
 }
@@ -250,10 +311,8 @@ function attachContactHandler() {
   }, 100);
 }
 
-// Закрытие popup по крестику
 popup.querySelector(".contact-popup-close").onclick = hideContactPopup;
 
-// Закрытие popup по клику вне окна
 document.addEventListener("mousedown", function(e){
   if(popup.classList.contains("active") && !popup.contains(e.target) && !e.target.classList.contains("contact-link")){
     hideContactPopup();
@@ -263,4 +322,3 @@ document.addEventListener("mousedown", function(e){
 </script>
 </body>
 </html>
-
