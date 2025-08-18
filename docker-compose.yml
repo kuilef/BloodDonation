@@ -33,8 +33,8 @@ services:
         while true; do
           echo '[Pipeline] ─── $$(date -u) ─ start' &&
           python -m backend.data_pipeline.run_pipeline &&
-          echo '[Pipeline] ─── $$(date -u) ─ finish; sleeping 7 days' &&
-          sleep 604800;       # 5×24×60×60
+          echo '[Pipeline] ─── $$(date -u) ─ finish; sleeping 1 days' &&
+          sleep 86400;       # 1×24×60×60
         done"
     restart: unless-stopped
 
