@@ -25,10 +25,10 @@
     }
     #lang-switcher{ text-align:left; margin-bottom:8px; }
 
-    [data-lang="he"] .info-text,
-    [data-lang="he"] #controls h1,
-    [data-lang="he"] #controls label{
-      direction:rtl; text-align:right;
+    .info-text,
+    #controls h1,
+    #controls label{
+      text-align:start;
     }
 
     #date-filter-form{ display:flex; flex-direction:row; gap:.5em; align-items:center; }
@@ -171,7 +171,7 @@ const i18n = {
   en:{
     title:"Blood Donations",
     info1:"The map shows blood donation locations based on data from the MDA website. Clicking on a point will lead to the registration page on the MDA site.",
-    info2_strong:"Please note:",
+    info2_strong:"Please note:&nbsp;",
     info2_span:"The location on the map may not be exact, please verify on the <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA website</a>.",
     date_label:"Show donations for date:",
     register:"Register"
@@ -179,7 +179,7 @@ const i18n = {
   ru:{
     title:"Донорство крови",
     info1:"Карта показывает места сдачи крови на основе данных с сайта MDA. Нажатие на точку приведёт на страницу регистрации на сайте MDA.",
-    info2_strong:"Внимание:",
+    info2_strong:"Внимание:&nbsp;",
     info2_span:"Местоположение на карте может быть неточным, пожалуйста, сверяйтесь с сайтом <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA</a>.",
     date_label:"Показать сдачи на дату:",
     register:"Запись"
@@ -187,7 +187,7 @@ const i18n = {
   he:{
     title:"תרומות דם - מפה",
     info1:"המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד\"א. לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד\"א.",
-    info2_strong:"שימו לב:",
+    info2_strong:"שימו לב:&nbsp;",
     info2_span:"המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר <a href='https://www.mdais.org/blood-donation' target='_blank'>מד\"א</a>.",
     date_label:"הצג תרומות לתאריך:",
     register:"להרשמה"
@@ -221,13 +221,16 @@ dateInp.valueAsDate = new Date();
 /*──────────────────────────────  функции  ─────────────────────────────────*/
 function applyLang(lang){
   currentLang = lang;
+  const rtl = (lang === 'he');
+
   document.documentElement.lang = lang;
-  document.documentElement.setAttribute("data-lang", lang);
+  document.documentElement.setAttribute('data-lang', lang);
+  document.documentElement.dir = (lang === 'he') ? 'rtl' : 'ltr';
 
   const t = i18n[lang];
-  document.querySelectorAll("[data-i18n]").forEach(el=>{
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
     const k = el.dataset.i18n;
-    if(t[k]) el.innerHTML = t[k];
+    if (t[k]) el.innerHTML = t[k];
   });
 
   map.attributionControl.removeAttribution(lastContactAttr);
