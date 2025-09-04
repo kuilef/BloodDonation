@@ -29,13 +29,22 @@ services:
     volumes:
       - ./backend/db:/data
     command: >
-      bash -c "
+      sh -c '
         while true; do
-          echo '[Pipeline] ─── $$(date -u) ─ start' &&
-          python -m backend.data_pipeline.run_pipeline &&
-          echo '[Pipeline] ─── $$(date -u) ─ finish; sleeping 1 days' &&
-          sleep 86400;       # 1×24×60×60
-        done"
+          SECS=$(python - <<PY
+          from datetime import datetime, timedelta, timezone
+          now=datetime.now(timezone.utc)
+          t=now.replace(hour=3, minute=20, second=0, microsecond=0)
+          if t<=now: t+=timedelta(days=1)
+          print(int((t-now).total_seconds()))
+          PY
+          )
+          echo "[Pipeline] next run in ${SECS}s until 03:20 UTC"; sleep ${SECS};
+          echo "[Pipeline] --- $(date -u) --- start";
+          python -m backend.data_pipeline.run_pipeline;
+          echo "[Pipeline] --- $(date -u) --- finish";
+          sleep 60;
+        done'
     restart: unless-stopped
 
   # ──────────────────────────
