@@ -4,3 +4,16 @@ tirmudam.org {
     reverse_proxy /donations* api:8000
     encode gzip zstd
 }
+
+#ws.tirmudam.org {
+#    reverse_proxy /vless host.docker.internal:10000
+#}
+
+ws.tirmudam.org {
+    reverse_proxy /vless host.docker.internal:10000 {
+        header_up Host {host}
+        transport http {
+            versions h1
+        }
+    }
+}
