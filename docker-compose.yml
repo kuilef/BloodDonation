@@ -28,23 +28,19 @@ services:
     env_file: .env
     volumes:
       - ./backend/db:/data
-    command: >
-      sh -c '
+    command:
+      - /bin/sh
+      - -c
+      - |
         while true; do
-          SECS=$(python - <<PY
-          from datetime import datetime, timedelta, timezone
-          now=datetime.now(timezone.utc)
-          t=now.replace(hour=3, minute=20, second=0, microsecond=0)
-          if t<=now: t+=timedelta(days=1)
-          print(int((t-now).total_seconds()))
-          PY
-          )
-          echo "[Pipeline] next run in ${SECS}s until 03:20 UTC"; sleep ${SECS};
-          echo "[Pipeline] --- $(date -u) --- start";
-          python -m backend.data_pipeline.run_pipeline;
-          echo "[Pipeline] --- $(date -u) --- finish";
-          sleep 60;
-        done'
+          SECS=$$(python -c "from datetime import datetime, timedelta, timezone; now=datetime.now(timezone.utc); t=now.replace(hour=3, minute=20, second=0, microsecond=0); target=(t+timedelta(days=1)) if t<=now else t; print(int((target-now).total_seconds()))")
+          echo "[Pipeline] next run in $$SECS s until 03:20 UTC"
+          sleep $$SECS
+          echo "[Pipeline] --- $$(date -u) --- start"
+          python -m backend.data_pipeline.run_pipeline
+          echo "[Pipeline] --- $$(date -u) --- finish"
+          sleep 60
+        done
     restart: unless-stopped
 
   # ──────────────────────────
