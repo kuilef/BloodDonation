@@ -15,6 +15,9 @@
         href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         crossorigin=""/>
 
+  <!-- qodesmith/datepicker CSS (≈6 KB gz) -->
+  <link rel="stylesheet" href="https://unpkg.com/js-datepicker/dist/datepicker.min.css">
+
   <style>
     html, body, #map { height: 100%; margin: 0; }
     body { font-size: 16px; }
@@ -121,13 +124,12 @@
       #controls.expanded #toggle-controls .arrow-up { display: block; }
       #controls.expanded #toggle-controls .arrow-down { display: none; }
     }
-
   </style>
 </head>
 <body>
 
 <div id="controls">
-  <!-- НОВОЕ: Кнопка для сворачивания/разворачивания -->
+  <!-- Кнопка сворачивания/разворачивания -->
   <button id="toggle-controls" aria-label="Toggle info panel">
     <svg class="arrow-down" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5H7z" fill="currentColor"></path></svg>
     <svg class="arrow-up" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 15l5-5 5 5H7z" fill="currentColor"></path></svg>
@@ -155,8 +157,13 @@
   </div>
 
   <form id="date-filter-form">
-    <label for="date" data-i18n="date_label">הצג תרומות לתאריך:</label>
-    <input type="date" id="date" name="date">
+    <label for="date_ui" data-i18n="date_label">הצג תרומות לתאריך:</label>
+
+    <!-- Видимый инпут для пользователя (DD/MM/YYYY) -->
+    <input id="date_ui" type="text" autocomplete="off" inputmode="numeric" placeholder="DD/MM/YYYY">
+
+    <!-- Скрытое ISO-значение для запросов (YYYY-MM-DD) -->
+    <input id="date" name="date" type="hidden">
   </form>
 </div>
 
@@ -164,6 +171,8 @@
 
 <!-- Leaflet JS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<!-- qodesmith/datepicker JS -->
+<script src="https://unpkg.com/js-datepicker"></script>
 
 <script>
 /*──────────────────────────────  словарь i18n  ─────────────────────────────*/
@@ -215,13 +224,45 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
 map.attributionControl.addAttribution(lastContactAttr);
 
 const markers = L.layerGroup().addTo(map);
-const dateInp = document.getElementById("date");
-dateInp.valueAsDate = new Date();
+
+/*──────────────────────────────  дата: picker (DD/MM/YYYY) + ISO  ──────────*/
+const dateUiInp  = document.getElementById("date_ui"); // видимое поле
+const dateIsoInp = document.getElementById("date");     // скрытое ISO поле
+
+const pad = n => String(n).padStart(2,'0');
+const isoFromDate = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const ddmmyyyy = d => `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`;
+
+// Парсинг ручного ввода вида DD/MM/YYYY (или с разделителями . или -)
+function parseUiToIso(str){
+  const m = String(str).trim().match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
+  if(!m) return "";
+  const d = Number(m[1]), mth = Number(m[2]) - 1, y = Number(m[3]);
+  const dt = new Date(y, mth, d);
+  // Проверка корректности даты
+  if(dt.getFullYear()!==y || dt.getMonth()!==mth || dt.getDate()!==d) return "";
+  return isoFromDate(dt);
+}
+
+// Инициализация календаря
+const picker = datepicker('#date_ui', {
+  formatter: (input, date) => { input.value = ddmmyyyy(date); },
+  onSelect: (instance, date) => {
+    dateIsoInp.value = isoFromDate(date);
+    refresh();
+  }
+});
+
+// Установка сегодняшней даты по умолчанию
+(function initToday(){
+  const today = new Date();
+  dateUiInp.value  = ddmmyyyy(today);
+  dateIsoInp.value = isoFromDate(today);
+})();
 
 /*──────────────────────────────  функции  ─────────────────────────────────*/
 function applyLang(lang){
   currentLang = lang;
-  const rtl = (lang === 'he');
 
   document.documentElement.lang = lang;
   document.documentElement.setAttribute('data-lang', lang);
@@ -237,12 +278,19 @@ function applyLang(lang){
   lastContactAttr = contactAttr[lang];
   map.attributionControl.addAttribution(lastContactAttr);
 
+  // Плейсхолдер под язык (минимально)
+  const placeholders = { he:'DD/MM/YYYY', en:'DD/MM/YYYY', ru:'ДД/ММ/ГГГГ' };
+  dateUiInp.placeholder = placeholders[lang] || 'DD/MM/YYYY';
+
   attachContactHandler();
 }
 
-
 function refresh(){
-  const q = new URLSearchParams({ donation_date:dateInp.value });
+  // Берём ISO-дату из скрытого поля
+  const donationDate = dateIsoInp.value;
+  if(!donationDate) return;
+
+  const q = new URLSearchParams({ donation_date: donationDate });
   fetch(`${API}/donations?${q}`)
     .then(r=>r.json())
     .then(list=>{
@@ -255,7 +303,8 @@ function refresh(){
           <a href="${p.scheduling_url}" target="_blank">${i18n[currentLang].register}</a>`;
         L.marker([p.latitude,p.longitude]).bindPopup(html).addTo(markers);
       });
-    });
+    })
+    .catch(()=>{ /* no-op */ });
 }
 
 /*──────────────────────────────  события  ─────────────────────────────────*/
@@ -265,19 +314,26 @@ document.getElementById("lang-switcher").addEventListener("click", e=>{
     if(i18n[lang]){ applyLang(lang); refresh(); }
   }
 });
-dateInp.addEventListener("change", refresh);
+
+// Обработка ручного ввода даты
+dateUiInp.addEventListener('change', () => {
+  const iso = parseUiToIso(dateUiInp.value);
+  if(iso){
+    dateIsoInp.value = iso;
+    refresh();
+  }
+});
 
 const controlsPanel = document.getElementById('controls');
 const toggleButton = document.getElementById('toggle-controls');
-
 toggleButton.addEventListener('click', () => {
   controlsPanel.classList.toggle('expanded');
 });
 
-
 applyLang(currentLang);
 refresh();
 
+/*──────────────────────────────  «Связь» попап  ───────────────────────────*/
 const popup = document.createElement("div");
 popup.className = "contact-popup";
 popup.innerHTML = `
@@ -290,12 +346,8 @@ popup.innerHTML = `
 `;
 document.body.appendChild(popup);
 
-function showContactPopup() {
-  popup.classList.add("active");
-}
-function hideContactPopup() {
-  popup.classList.remove("active");
-}
+function showContactPopup() { popup.classList.add("active"); }
+function hideContactPopup() { popup.classList.remove("active"); }
 
 // Делегируем обработчик на карту, чтобы ловить появление новой ссылки
 map.on("layeradd", attachContactHandler);
@@ -321,7 +373,6 @@ document.addEventListener("mousedown", function(e){
     hideContactPopup();
   }
 });
-
 </script>
 </body>
 </html>
