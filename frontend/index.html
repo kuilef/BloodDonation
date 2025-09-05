@@ -15,7 +15,7 @@
         href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         crossorigin=""/>
 
-  <!-- qodesmith/datepicker CSS (≈6 KB gz) -->
+  <!-- qodesmith/datepicker CSS -->
   <link rel="stylesheet" href="https://unpkg.com/js-datepicker/dist/datepicker.min.css">
 
   <style>
@@ -90,14 +90,17 @@
       height: 24px;
     }
 
+    /* Календарь — всегда в пределах экрана */
+    .qs-datepicker-container { z-index: 3000; }
+    .qs-datepicker {
+      max-width: calc(100vw - 16px);
+      box-sizing: border-box;
+    }
+
     /* Медиа-запрос для мобильных устройств */
     @media (max-width: 767px) {
-      /* Показываем кнопку-стрелку */
-      #toggle-controls {
-        display: block;
-      }
+      #toggle-controls { display: block; }
 
-      /* Скрываем текстовый блок по умолчанию */
       #controls .info-text {
         max-height: 0;
         overflow: hidden;
@@ -120,10 +123,15 @@
 
       #toggle-controls .arrow-up { display: none; }
       #toggle-controls .arrow-down { display: block; }
-
       #controls.expanded #toggle-controls .arrow-up { display: block; }
       #controls.expanded #toggle-controls .arrow-down { display: none; }
+    
+      /* Узкое поле даты + не растягиваем во flex */
+      #date-filter-form #date_ui {
+        width: 12ch;        /* DD/MM/YYYY = ~10 символов; +запас */
+        flex: 0 0 auto;     /* не растягиваться по ширине */
     }
+  }
   </style>
 </head>
 <body>
@@ -158,10 +166,8 @@
 
   <form id="date-filter-form">
     <label for="date_ui" data-i18n="date_label">הצג תרומות לתאריך:</label>
-
     <!-- Видимый инпут для пользователя (DD/MM/YYYY) -->
-    <input id="date_ui" type="text" autocomplete="off" inputmode="numeric" placeholder="DD/MM/YYYY">
-
+    <input id="date_ui" type="text" size="10" autocomplete="off" inputmode="numeric" placeholder="DD/MM/YYYY">
     <!-- Скрытое ISO-значение для запросов (YYYY-MM-DD) -->
     <input id="date" name="date" type="hidden">
   </form>
@@ -182,7 +188,7 @@ const i18n = {
     info1:"The map shows blood donation locations based on data from the MDA website. Clicking on a point will lead to the registration page on the MDA site.",
     info2_strong:"Please note:&nbsp;",
     info2_span:"The location on the map may not be exact, please verify on the <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA website</a>.",
-    date_label:"Show donations for date:",
+    date_label:"Show donations for date",
     register:"Register"
   },
   ru:{
@@ -190,7 +196,7 @@ const i18n = {
     info1:"Карта показывает места сдачи крови на основе данных с сайта MDA. Нажатие на точку приведёт на страницу регистрации на сайте MDA.",
     info2_strong:"Внимание:&nbsp;",
     info2_span:"Местоположение на карте может быть неточным, пожалуйста, сверяйтесь с сайтом <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA</a>.",
-    date_label:"Показать сдачи на дату:",
+    date_label:"Показать сдачи на дату",
     register:"Запись"
   },
   he:{
@@ -198,7 +204,7 @@ const i18n = {
     info1:"המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד\"א. לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד\"א.",
     info2_strong:"שימו לב:&nbsp;",
     info2_span:"המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר <a href='https://www.mdais.org/blood-donation' target='_blank'>מד\"א</a>.",
-    date_label:"הצג תרומות לתאריך:",
+    date_label:"הצג תרומות לתאריך",
     register:"להרשמה"
   }
 };
@@ -239,18 +245,49 @@ function parseUiToIso(str){
   if(!m) return "";
   const d = Number(m[1]), mth = Number(m[2]) - 1, y = Number(m[3]);
   const dt = new Date(y, mth, d);
-  // Проверка корректности даты
   if(dt.getFullYear()!==y || dt.getMonth()!==mth || dt.getDate()!==d) return "";
   return isoFromDate(dt);
 }
 
+// Позиционирование календаря на мобиле: по центру по X, «прилип» к низу поля по Y
+function positionPickerMobile(){
+  const cont = document.querySelector('.qs-datepicker-container');
+  if(!cont) return;
+
+  const rect = dateUiInp.getBoundingClientRect();
+  const margin = 8;
+
+  // фиксируем к вьюпорту и центрируем по X
+  cont.style.position = 'fixed';
+  cont.style.left = '50%';
+  cont.style.transform = 'translateX(-50%)';
+  cont.style.right = '';
+  cont.style.bottom = '';
+  cont.style.top = `${rect.bottom + margin}px`;
+
+  // Подстраховка от выхода вниз за экран
+  requestAnimationFrame(() => {
+    const cr = cont.getBoundingClientRect();
+    if (cr.bottom > window.innerHeight - margin) {
+      const newTop = Math.max(margin, window.innerHeight - cr.height - margin);
+      cont.style.top = `${newTop}px`;
+    }
+  });
+}
+
 // Инициализация календаря
+const isMobile = window.matchMedia('(max-width: 600px)').matches;
+const isRTL = (document.documentElement.getAttribute('data-lang') === 'he' || document.documentElement.dir === 'rtl');
+const desktopPos = 'bl'; // всегда снизу от поля на десктопе
+
 const picker = datepicker('#date_ui', {
+  position: desktopPos,
   formatter: (input, date) => { input.value = ddmmyyyy(date); },
   onSelect: (instance, date) => {
     dateIsoInp.value = isoFromDate(date);
     refresh();
-  }
+  },
+  onShow: () => { if (isMobile) positionPickerMobile(); } // после открытия — центр/прилипание
 });
 
 // Установка сегодняшней даты по умолчанию
@@ -259,6 +296,30 @@ const picker = datepicker('#date_ui', {
   dateUiInp.value  = ddmmyyyy(today);
   dateIsoInp.value = isoFromDate(today);
 })();
+
+// Триггеры позиционирования на мобиле
+if (isMobile) {
+  // (опционально) чтобы не всплывала экранная клавиатура:
+  // dateUiInp.setAttribute('readonly', 'readonly');
+
+  const forceOpenAndPosition = () => {
+    // открыть после текущего события, затем позиционировать (onShow тоже вызовется)
+    setTimeout(() => {
+      picker.show();
+      // подстраховка: если onShow задержится — дёрнем позиционирование напрямую
+      setTimeout(positionPickerMobile, 0);
+    }, 0);
+  };
+
+  // pointerdown ловит и tap, и мышь; работает надёжнее, чем click
+  dateUiInp.addEventListener('pointerdown', forceOpenAndPosition, { passive: true });
+  dateUiInp.addEventListener('focus', forceOpenAndPosition);
+
+  // чтобы календарь оставался в видимой зоне при изменениях вьюпорта
+  window.addEventListener('resize', positionPickerMobile);
+  window.addEventListener('orientationchange', positionPickerMobile);
+  window.addEventListener('scroll', positionPickerMobile, { passive: true });
+}
 
 /*──────────────────────────────  функции  ─────────────────────────────────*/
 function applyLang(lang){
@@ -286,7 +347,6 @@ function applyLang(lang){
 }
 
 function refresh(){
-  // Берём ISO-дату из скрытого поля
   const donationDate = dateIsoInp.value;
   if(!donationDate) return;
 
