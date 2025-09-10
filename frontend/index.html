@@ -128,8 +128,8 @@
     
       /* Узкое поле даты + не растягиваем во flex */
       #date-filter-form #date_ui {
-        width: 12ch;        /* DD/MM/YYYY = ~10 символов; +запас */
-        flex: 0 0 auto;     /* не растягиваться по ширине */
+        width: 12ch;
+        flex: 0 0 auto;
     }
   }
   </style>
@@ -217,7 +217,15 @@ const contactAttr = {
 };
 
 const API = "";                       // URL вашего backend’а
-let currentLang = "he";
+
+// NEW: read ?lang at load and use it as the initial language
+const SUPPORTED_LANGS = ['he','en','ru'];
+let currentLang = (() => {
+  const v = (new URLSearchParams(window.location.search).get('lang') || '').toLowerCase();
+  return SUPPORTED_LANGS.includes(v) ? v : 'he';
+})();
+// END NEW
+
 let lastContactAttr = contactAttr[currentLang];
 
 /*─────────────────────────────  инициализация карты  ───────────────────────*/
@@ -257,7 +265,6 @@ function positionPickerMobile(){
   const rect = dateUiInp.getBoundingClientRect();
   const margin = 8;
 
-  // фиксируем к вьюпорту и центрируем по X
   cont.style.position = 'fixed';
   cont.style.left = '50%';
   cont.style.transform = 'translateX(-50%)';
@@ -265,7 +272,6 @@ function positionPickerMobile(){
   cont.style.bottom = '';
   cont.style.top = `${rect.bottom + margin}px`;
 
-  // Подстраховка от выхода вниз за экран
   requestAnimationFrame(() => {
     const cr = cont.getBoundingClientRect();
     if (cr.bottom > window.innerHeight - margin) {
@@ -278,7 +284,7 @@ function positionPickerMobile(){
 // Инициализация календаря
 const isMobile = window.matchMedia('(max-width: 600px)').matches;
 const isRTL = (document.documentElement.getAttribute('data-lang') === 'he' || document.documentElement.dir === 'rtl');
-const desktopPos = 'bl'; // всегда снизу от поля на десктопе
+const desktopPos = 'bl';
 
 const picker = datepicker('#date_ui', {
   position: desktopPos,
@@ -287,7 +293,7 @@ const picker = datepicker('#date_ui', {
     dateIsoInp.value = isoFromDate(date);
     refresh();
   },
-  onShow: () => { if (isMobile) positionPickerMobile(); } // после открытия — центр/прилипание
+  onShow: () => { if (isMobile) positionPickerMobile(); }
 });
 
 // Установка сегодняшней даты по умолчанию
@@ -299,23 +305,14 @@ const picker = datepicker('#date_ui', {
 
 // Триггеры позиционирования на мобиле
 if (isMobile) {
-  // (опционально) чтобы не всплывала экранная клавиатура:
-  // dateUiInp.setAttribute('readonly', 'readonly');
-
   const forceOpenAndPosition = () => {
-    // открыть после текущего события, затем позиционировать (onShow тоже вызовется)
     setTimeout(() => {
       picker.show();
-      // подстраховка: если onShow задержится — дёрнем позиционирование напрямую
       setTimeout(positionPickerMobile, 0);
     }, 0);
   };
-
-  // pointerdown ловит и tap, и мышь; работает надёжнее, чем click
   dateUiInp.addEventListener('pointerdown', forceOpenAndPosition, { passive: true });
   dateUiInp.addEventListener('focus', forceOpenAndPosition);
-
-  // чтобы календарь оставался в видимой зоне при изменениях вьюпорта
   window.addEventListener('resize', positionPickerMobile);
   window.addEventListener('orientationchange', positionPickerMobile);
   window.addEventListener('scroll', positionPickerMobile, { passive: true });
