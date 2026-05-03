@@ -1,19 +1,15 @@
-tirmudam.org {
+:80 {
+  @tirmudam host tirmudam.org
+  handle @tirmudam {
+    encode gzip zstd
+
+    handle /donations* {
+      reverse_proxy api:8000
+    }
+
     root * /usr/share/caddy
     file_server
-    reverse_proxy /donations* api:8000
-    encode gzip zstd
-}
+  }
 
-#ws.tirmudam.org {
-#    reverse_proxy /vless host.docker.internal:10000
-#}
-
-ws.tirmudam.org {
-    reverse_proxy /vless host.docker.internal:10000 {
-        header_up Host {host}
-        transport http {
-            versions h1
-        }
-    }
+  respond "not found" 404
 }
