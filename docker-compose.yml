@@ -1,17 +1,4 @@
 services:
-  router:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    depends_on:
-      - api
-    environment:
-      - SERVICE_FQDN_ROUTER_80=/
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./frontend:/usr/share/caddy:ro
-    expose:
-      - "80"
-
   api:
     build: .
     restart: unless-stopped
