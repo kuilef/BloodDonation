@@ -1,0 +1,15 @@
+name = "mda-browser"
+main = "src/worker.js"
+compatibility_date = "2025-08-03"
+compatibility_flags = ["nodejs_compat_v2"]
+
+[triggers]
+crons = ["0 */4 * * *"]   # каждые 4 часа: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
+
+[[kv_namespaces]]
+binding    = "MDA_DATA"
+id         = "0b4e0dd84c434b89b8ef1d8dcdf75891"        # Namespace ID из Dashboard / wrangler kv:namespace create
+preview_id = "4db14f4293fb465aae048ae304a43ba1"        # чтобы wrangler dev писал в песочницу
+
+[observability.logs]
+enabled = true

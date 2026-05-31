@@ -1,0 +1,1606 @@
+BloodDonation\
+├── backend
+│   ├── data_pipeline
+│   │   ├── geocoder.py
+│   │   ├── processor.py
+│   │   └── run_pipeline.py
+│   ├── db
+│   │   ├── operations.py
+│   │   └── schema.py
+│   ├── app.py
+│   └── requirements.txt
+├── frontend
+│   └── index.html
+├── mda-proxy
+│   ├── .wrangler
+│   ├── src
+│   │   └── worker.js
+│   └── wrangler.toml
+├── .gitignore
+├── 03.09.2025.json
+├── Caddyfile
+├── docker-compose.yml
+├── Dockerfile
+└── README.md
+
+<file path="backend/data_pipeline/geocoder.py">
+import sqlite3
+import time
+import os
+from typing import Dict, Tuple, List, Optional
+import requests
+
+from unidecode import unidecode
+
+# The Google API key is loaded from an environment variable for security.
+# It must be set before running the application.
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    raise ValueError("GOOGLE_API_KEY environment variable not found.")
+
+
+def google_geocode(q: str) -> Optional[Tuple[float, float]]:
+    """Geocodes a query string using Google Places API Text Search.
+
+    This method is preferred for free-form or descriptive queries 
+    (e.g., 'near the park entrance') as it can provide more accurate results
+    than standard address geocoding.
+
+    Args:
+        q: The query string to geocode.
+
+    Returns:
+        A tuple of (latitude, longitude) if found, otherwise None.
+    """
+    params = {
+        'query': q,
+        'key': GOOGLE_API_KEY,
+        'language': 'iw',
+        'region': 'IL'  # Bias results to Israel for relevance
+    }
+    try:
+        response = requests.get(
+            'https://maps.googleapis.com/maps/api/place/textsearch/json',
+            params=params,
+            timeout=5  # Set a timeout for network robustness
+        )
+        response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
+        data = response.json()
+
+        if data.get('status') == 'OK' and data.get('results'):
+            location = data['results'][0]['geometry']['location']
+            return location['lat'], location['lng']
+        else:
+            # Log non-OK status for debugging, e.g., ZERO_RESULTS
+            print(f"    [Geocoder] API returned status: {data.get('status')} for query: '{q}'")
+            return None
+
+    except requests.exceptions.RequestException as e:
+        print(f"    [Geocoder] HTTP Request failed: {e}")
+    except (KeyError, IndexError) as e:
+        print(f"    [Geocoder] Failed to parse API response: {e}")
+    
+    return None
+
+def get_from_cache(cur: sqlite3.Cursor, key: str) -> Optional[Tuple[float, float]]:
+    """Retrieves coordinates from the geocache database if the key exists."""
+    row = cur.execute("SELECT lat, lon FROM geocache WHERE key=?", (key,)).fetchone()
+    return row if row else None
+
+def save_to_cache(cur: sqlite3.Cursor, key: str, lat: float, lon: float, is_exact: bool):
+    """Saves or updates a geocoded location in the cache."""
+    cur.execute("""
+        INSERT OR REPLACE INTO geocache (key, lat, lon, is_exact, updated_at)
+        VALUES (?, ?, ?, ?, datetime('now'))
+    """, (key, lat, lon, int(is_exact)))
+
+def create_address_key(item: Dict[str, str]) -> str:
+    """Creates a normalized, consistent key from address components."""
+    city = item.get("City", "").strip()
+    street = item.get("Street", "").strip()
+    num = item.get("NumHouse", "").strip()
+    name = item.get("Name", "").strip()     # IMPORTANT: Name is included to handle cases with only city and name.
+    # Using a format that is readable and less prone to separator issues
+    return f"{city}, {street}, {num}, {name}".strip().rstrip(',')
+
+def _generate_queries(item: Dict[str, str], use_latin: bool = False) -> List[Tuple[str, bool]]:
+    """
+    Generates a list of address queries to try, from most specific to least specific.
+    This creates a fallback mechanism: if a detailed query fails, a less
+    detailed one is tried.
+    Returns a list of (query_string, is_exact_flag).
+    """
+    def tr(s: str) -> str:
+        return unidecode(s) if use_latin else s
+
+    city = tr(item.get("City", "").strip())
+    street = tr(item.get("Street", "").strip())
+    num = tr(item.get("NumHouse", "").strip())
+    name = tr(item.get("Name", "").strip())
+
+    queries = []
+    
+    # --- Query generation logic: from most specific to least specific ---
+
+    # 1. All fields: Name, Street, Number, City
+    if name and city and street and num:
+        queries.append((f"{street} {num} {city}, {name}", True))
+
+    # 2. No Name: Street, Number, City
+    if city and street and num:
+        queries.append((f"{street} {num}, {city} ", True))
+
+    # 3. No Number: Name, Street, City
+    if name and city and street:
+        queries.append((f"{street}, {city}, {name}", True))
+
+    # 4. No Name, No Number: Street, City
+    if city and street:
+        queries.append((f"{city}, {street}", True))
+
+    # 5. No Street info: Name, City
+    if name and city:
+        queries.append((f"{city}, {name}", True))
+
+    # 6. Only City (least specific)
+    if city:
+        queries.append((city, False))
+    
+    # Remove duplicates while preserving order
+    unique_queries = []
+    seen = set()
+    for q, flag in queries:
+        if q not in seen:
+            unique_queries.append((q, flag))
+            seen.add(q)
+
+    return unique_queries
+
+def get_coordinates(geocache_cursor: sqlite3.Cursor, item: Dict[str, str]) -> Optional[Tuple[float, float]]:
+    """
+    Main function to get coordinates for a donation item.
+    It checks the cache first. On a cache miss, it queries the geocoding API
+    and stores the result back in the cache.
+    """
+    address_key = create_address_key(item)
+    
+    # 1. Check cache first
+    cached_coords = get_from_cache(geocache_cursor, address_key)
+    if cached_coords:
+        return cached_coords
+
+    # 2. On cache miss, generate queries and try to geocode
+    all_queries = _generate_queries(item, use_latin=False)
+
+    for query, is_exact in all_queries:
+        if not query or query.strip() == ',':
+            continue
+
+        print(f"    [Geocoder] Cache miss for '{address_key}'. Querying Google API with: '{query}'")
+        
+        # The geocode function now returns a tuple (lat, lon) or None
+        coords = google_geocode(query)
+        
+        if coords:
+            lat, lon = coords
+            # Save to cache for next time
+            save_to_cache(geocache_cursor, address_key, lat, lon, is_exact)
+            print(f"    [Geocoder] Found and cached: ({lat:.5f}, {lon:.5f})")
+            return lat, lon
+        
+        # Wait a bit before the next query to avoid hitting API rate limits
+        time.sleep(0.1)
+            
+    # 3. If all attempts fail
+    return None
+
+</file>
+<file path="backend/data_pipeline/processor.py">
+import requests
+import sqlite3
+import pathlib
+import json
+import re
+
+# Use the project's canonical, caching geocoder
+from .geocoder import get_coordinates
+from ..db.schema import DONATIONS_DB_PATH, GEOCACHE_DB_PATH
+
+MDA_API_URL = "https://mda-browser.kuilef42.workers.dev?date=latest"
+# LANDING_URL = "https://www.mdais.org/blood-donation"
+
+
+def fetch_mda_data(limit: int | None = 10) -> list:
+    """
+    Получает расписание через Cloudflare-Worker.
+    Возвращает первые `limit` записей (или все, если limit=None).
+    """
+    print("[Processor] Fetching data from Worker…")
+    try:
+        resp = requests.get(MDA_API_URL, timeout=15)
+        resp.raise_for_status()
+        donations = resp.json()          # Worker отдаёт уже готовый JSON-массив
+        if limit is not None:
+            donations = donations[:limit]
+        print(f"[Processor] Got {len(donations)} records (limit {limit}).")
+        return donations
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        print(f"[Processor] ERROR: fetch failed: {e}")
+        return []
+
+
+def clear_donations_table(conn: sqlite3.Connection):
+    """Deletes all records from the donations table to ensure fresh data."""
+    print("[Processor] Clearing old data from donations table...")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM donations")
+    conn.commit()
+    print("[Processor] Old data cleared.")
+
+
+def insert_donation(conn: sqlite3.Connection, record: dict):
+    """Inserts a single processed donation record into the database."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO donations (
+            donation_date, city, street, num_house, name, from_hour, to_hour,
+            scheduling_url, latitude, longitude
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        record['donation_date'], record['city'], record['street'],
+        record['num_house'], record['name'], record['from_hour'],
+        record['to_hour'], record['scheduling_url'], record['latitude'],
+        record['longitude']
+    ))
+
+
+def run_processor():
+    """
+    Main pipeline:
+    - Fetch records from MDA
+    - Use the caching geocoder to find coordinates
+    - Populate database
+    """
+    print("--- Starting Data Processing Pipeline ---")
+
+    # Database connections are established. The run_pipeline script ensures DBs are created.
+    donations_conn = sqlite3.connect(DONATIONS_DB_PATH)
+    geocache_conn = sqlite3.connect(GEOCACHE_DB_PATH)
+    geocache_cursor = geocache_conn.cursor()
+
+    mda_stations = fetch_mda_data(limit=None)
+    if not mda_stations:
+        print("[Processor] No data fetched. Aborting pipeline.")
+        donations_conn.close()
+        geocache_conn.close()
+        return
+
+    clear_donations_table(donations_conn)
+
+    print(f"[Processor] Processing {len(mda_stations)} donation stations...")
+    processed_count = 0
+    missing_coords_count = 0
+
+    for station in mda_stations:
+        # This now uses the caching geocoder, passing the database cursor.
+        coords = get_coordinates(geocache_cursor, station)
+        if coords:
+            lat, lon = coords
+            city = station.get('City', '').strip()
+            street = station.get('Street', '').strip()
+            name = station.get('Name', '').strip()
+            record = {
+                'donation_date': station['DateDonation'].split('T')[0],
+                'city': city,
+                'street': street,
+                'num_house': station.get('NumHouse', '').strip(),
+                'name': name,
+                'from_hour': station['FromHour'],
+                'to_hour': station['ToHour'],
+                'scheduling_url': station['SchedulingURL'],
+                'latitude': lat,
+                'longitude': lon
+            }
+            insert_donation(donations_conn, record)
+            processed_count += 1
+        else:
+            missing_coords_count += 1
+            print(f"  [Processor] WARNING: Missing coords for {station.get('City')}, {station.get('Street')} ")
+
+    donations_conn.commit()
+    geocache_conn.commit()
+    donations_conn.close()
+    geocache_conn.close()
+
+    print("--- Data Processing Pipeline Finished ---")
+    print(f"Processed: {processed_count}, Missing coords: {missing_coords_count}")
+
+</file>
+<file path="backend/data_pipeline/run_pipeline.py">
+from . import processor
+from ..db import schema
+
+def main():
+    """
+    Entry point for running the data pipeline.
+    1. Ensures the application and geocache database schemas exist.
+    2. Runs the main data processor.
+    """
+    print("--- Initializing Pipeline Run ---")
+    # First, ensure all required databases and tables exist
+    schema.create_database()
+    schema.create_geocache_database()
+    
+    # Now, run the main processing logic
+    processor.run_processor()
+    print("--- Pipeline Run Complete ---")
+
+if __name__ == "__main__":
+    main()
+
+</file>
+<file path="backend/db/operations.py">
+import sqlite3
+from datetime import date
+from typing import List, Dict, Any
+
+import dotenv
+dotenv.load_dotenv()
+from .schema import DONATIONS_DB_PATH
+
+def _dict_factory(cursor, row):
+    """Converts a database row into a dictionary."""
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+def get_db_connection():
+    """Establishes a connection to the SQLite database."""
+    conn = sqlite3.connect(DONATIONS_DB_PATH)
+    conn.row_factory = _dict_factory
+    return conn
+
+def get_donations_by_date(donation_date: str) -> List[Dict[str, Any]]:
+    """
+    Retrieves all donation records for a specific date.
+    The date should be in 'YYYY-MM-DD' format.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM donations WHERE donation_date = ?", (donation_date,))
+    donations = cursor.fetchall()
+    conn.close()
+    return donations
+
+def get_all_cities() -> List[Dict[str, Any]]:
+    """
+    Retrieves a unique list of all cities with active donation stations.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Query for distinct cities, ordering by the Hebrew name
+    cursor.execute("""
+        SELECT DISTINCT city
+        FROM donations
+        ORDER BY city
+    """)
+    cities = cursor.fetchall()
+    conn.close()
+    return cities
+
+</file>
+<file path="backend/db/schema.py">
+import sqlite3
+import os
+import pathlib
+import dotenv
+dotenv.load_dotenv()
+
+# Define the path to the databases from environment variables
+_donations_db_path_str = os.getenv("DONATIONS_DB_PATH")
+_geocache_db_path_str = os.getenv("GEOCACHE_DB_PATH")
+
+if not _donations_db_path_str:
+    raise ValueError("DONATIONS_DB_PATH environment variable not found.")
+if not _geocache_db_path_str:
+    raise ValueError("GEOCACHE_DB_PATH environment variable not found.")
+
+# Convert paths to pathlib.Path objects for consistency
+DONATIONS_DB_PATH = pathlib.Path(_donations_db_path_str)
+GEOCACHE_DB_PATH = pathlib.Path(_geocache_db_path_str)
+
+def create_database():
+    """
+    Creates the donations.db database and the 'donations' table with necessary indexes.
+    This function is idempotent.
+    """
+    print(f"Initializing donations database at: {DONATIONS_DB_PATH}")
+    conn = sqlite3.connect(DONATIONS_DB_PATH)
+    cursor = conn.cursor()
+
+    # Create the main donations table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS donations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        donation_date TEXT NOT NULL,
+        city TEXT NOT NULL,
+        street TEXT,
+        num_house TEXT,
+        name TEXT NOT NULL,
+        from_hour TEXT NOT NULL,
+        to_hour TEXT NOT NULL,
+        scheduling_url TEXT UNIQUE,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL
+    )
+    """)
+
+    # Create indexes for faster queries
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_donation_date ON donations (donation_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_city ON donations (city)")
+
+    conn.commit()
+    conn.close()
+    print("Donations database schema created successfully.")
+
+def create_geocache_database():
+    """
+    Creates the geocache.db database and the 'geocache' table.
+    The schema is designed for the pipeline's caching geocoder.
+    This function is idempotent.
+    """
+    print(f"Initializing geocache database at: {GEOCACHE_DB_PATH}")
+    conn = sqlite3.connect(GEOCACHE_DB_PATH)
+    cursor = conn.cursor()
+
+    # key is a normalized string of address components
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS geocache (
+        key TEXT PRIMARY KEY,
+        lat REAL NOT NULL,
+        lon REAL NOT NULL,
+        is_exact INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+    print("Geocache database schema created successfully.")
+
+if __name__ == "__main__":
+    create_database()
+    create_geocache_database()
+
+</file>
+<file path="backend/app.py">
+"""
+python -m backend.data_pipeline.run_pipeline
+— создаёт/обновляет donations.db, заполняет данными и кэшем координат.
+
+Запуск сервера
+uvicorn backend.app:app --reload
+
+Открытие интерфейса
+В браузере перейти на http://localhost:8000/ (или соответствующий хост), после чего:
+
+увидеть на карте ближайшие станции и оформить запись.
+"""
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from datetime import date
+from typing import Optional
+
+from .db import operations
+from .db.schema import DONATIONS_DB_PATH
+
+app = FastAPI(
+    title="Blood Donation Map",
+    description="Find blood donation stations in Israel.",
+    version="1.0.0",
+)
+
+# Configure CORS to allow frontend access
+# In a production environment, restrict the origins.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+@app.on_event("startup")
+async def startup_event():
+    """Check for database on startup."""
+    if not DONATIONS_DB_PATH.exists():
+        raise RuntimeError(
+            f"Database not found at {DONATIONS_DB_PATH}. "
+            "Please run the data pipeline first to create and populate the database."
+        )
+
+@app.get("/donations", summary="Get donation stations by date")
+async def get_donations(
+    donation_date: Optional[str] = Query(
+        None,
+        description="Date in YYYY-MM-DD format. Defaults to today.",
+        regex=r"^\d{4}-\d{2}-\d{2}$"
+    )
+):
+    """
+    Returns a list of all available blood donation stations for a given date.
+    If no date is provided, it defaults to the current day.
+    """
+    target_date = donation_date or date.today().isoformat()
+    try:
+        results = operations.get_donations_by_date(target_date)
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+# Serve the frontend, including index.html and other assets like favicons
+app.mount("/", StaticFiles(directory="frontend", html=True), name="static")
+</file>
+<file path="backend/requirements.txt">
+fastapi
+uvicorn
+requests
+unidecode
+python-dotenv
+</file>
+<file path="frontend/index.html">
+<!DOCTYPE html>
+<html lang="he" data-lang="he">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>תרומות דם - דמו / Blood donation map</title>
+
+  <!-- Favicons -->
+  <link rel="icon" type="image/png" href="favicon-96x96.png" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="shortcut icon" href="favicon.ico" />
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        crossorigin=""/>
+
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    body { font-size: 16px; }
+
+    #controls{
+      position:absolute; left:0; right:auto;
+      z-index:1000; max-width:450px; padding:8px; background:#fff;
+    }
+    #lang-switcher{ text-align:left; margin-bottom:8px; }
+
+    .info-text,
+    #controls h1,
+    #controls label{
+      text-align:start;
+    }
+
+    #date-filter-form{ display:flex; flex-direction:row; gap:.5em; align-items:center; }
+    [data-lang="he"] #date-filter-form{ flex-direction:row-reverse; }
+
+    .leaflet-control-attribution .contact-link{ text-decoration:none; }
+    .leaflet-control-attribution .contact-link:hover{ text-decoration:underline; }
+
+    .info-text {
+      margin: 1em 0;
+      padding: 1em;
+      background: #f8f9fa;
+      border-radius: 5px;
+    }
+
+    .contact-popup {
+      display: none;
+      position: fixed;
+      right: 16px;
+      bottom: 48px;
+      z-index: 2000;
+      background: #fff;
+      border: 1px solid #bbb;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px #0002;
+      padding: 1em 1.5em;
+      min-width: 220px;
+      font-size: 1em;
+    }
+    .contact-popup.active { display: block; }
+    .contact-popup-close {
+      position: absolute;
+      top: 6px;
+      right: 10px;
+      background: none;
+      border: none;
+      font-size: 1.2em;
+      cursor: pointer;
+      color: #888;
+    }
+
+    #toggle-controls {
+      display: none;
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 1001;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px;
+      line-height: 1;
+    }
+    #toggle-controls svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    /* Медиа-запрос для мобильных устройств */
+    @media (max-width: 767px) {
+      /* Показываем кнопку-стрелку */
+      #toggle-controls {
+        display: block;
+      }
+
+      /* Скрываем текстовый блок по умолчанию */
+      #controls .info-text {
+        max-height: 0;
+        overflow: hidden;
+        padding-top: 0;
+        padding-bottom: 0;
+        margin-top: 0;
+        margin-bottom: 0;
+        transition: all 0.3s ease-in-out;
+        background: none;
+        border-radius: 0;
+        border: none;
+        box-shadow: none; 
+      }
+
+      #controls.expanded .info-text {
+        max-height: 300px;
+        padding: 1em;
+        margin: 1em 0;
+      }
+
+      #toggle-controls .arrow-up { display: none; }
+      #toggle-controls .arrow-down { display: block; }
+
+      #controls.expanded #toggle-controls .arrow-up { display: block; }
+      #controls.expanded #toggle-controls .arrow-down { display: none; }
+    }
+
+  </style>
+</head>
+<body>
+
+<div id="controls">
+  <!-- НОВОЕ: Кнопка для сворачивания/разворачивания -->
+  <button id="toggle-controls" aria-label="Toggle info panel">
+    <svg class="arrow-down" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5H7z" fill="currentColor"></path></svg>
+    <svg class="arrow-up" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 15l5-5 5 5H7z" fill="currentColor"></path></svg>
+  </button>
+
+  <div id="lang-switcher">
+    <button data-lang="en">En</button>
+    <button data-lang="ru">Ru</button>
+    <button data-lang="he">He</button>
+  </div>
+
+  <h1 data-i18n="title">תרומות דם - מפה</h1>
+
+  <div class="info-text">
+    <p data-i18n="info1">
+      המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד״א.
+      לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד״א.
+    </p>
+    <p>
+      <strong data-i18n="info2_strong">שימו לב:</strong>
+      <span data-i18n="info2_span">
+        המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר מד״א.
+      </span>
+    </p>
+  </div>
+
+  <form id="date-filter-form">
+    <label for="date" data-i18n="date_label">הצג תרומות לתאריך:</label>
+    <input type="date" id="date" name="date">
+  </form>
+</div>
+
+<div id="map"></div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+<script>
+/*──────────────────────────────  словарь i18n  ─────────────────────────────*/
+const i18n = {
+  en:{
+    title:"Blood Donations",
+    info1:"The map shows blood donation locations based on data from the MDA website. Clicking on a point will lead to the registration page on the MDA site.",
+    info2_strong:"Please note:&nbsp;",
+    info2_span:"The location on the map may not be exact, please verify on the <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA website</a>.",
+    date_label:"Show donations for date:",
+    register:"Register"
+  },
+  ru:{
+    title:"Донорство крови",
+    info1:"Карта показывает места сдачи крови на основе данных с сайта MDA. Нажатие на точку приведёт на страницу регистрации на сайте MDA.",
+    info2_strong:"Внимание:&nbsp;",
+    info2_span:"Местоположение на карте может быть неточным, пожалуйста, сверяйтесь с сайтом <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA</a>.",
+    date_label:"Показать сдачи на дату:",
+    register:"Запись"
+  },
+  he:{
+    title:"תרומות דם - מפה",
+    info1:"המפה מציגה מיקומי התרמות דם על סמך נתונים מאתר מד\"א. לחיצה על נקודה תוביל לעמוד הרישום להתמרה באתר מד\"א.",
+    info2_strong:"שימו לב:&nbsp;",
+    info2_span:"המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר <a href='https://www.mdais.org/blood-donation' target='_blank'>מד\"א</a>.",
+    date_label:"הצג תרומות לתאריך:",
+    register:"להרשמה"
+  }
+};
+
+/*───────────────────────────  надпись «Связь» в атрибуции  ─────────────────*/
+const contactAttr = {
+  en:'• <a href="#" id="contact-link" class="contact-link">Contact</a>',
+  ru:'• <a href="#" id="contact-link" class="contact-link">Связь</a>',
+  he:'• <a href="#" id="contact-link" class="contact-link">יצירת קשר</a>'
+};
+
+const API = "";                       // URL вашего backend’а
+let currentLang = "he";
+let lastContactAttr = contactAttr[currentLang];
+
+/*─────────────────────────────  инициализация карты  ───────────────────────*/
+const map = L.map("map",{ zoomControl:false }).setView([31.8,34.9],8);
+L.control.zoom({ position:"bottomright" }).addTo(map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
+
+map.attributionControl.addAttribution(lastContactAttr);
+
+const markers = L.layerGroup().addTo(map);
+const dateInp = document.getElementById("date");
+dateInp.valueAsDate = new Date();
+
+/*──────────────────────────────  функции  ─────────────────────────────────*/
+function applyLang(lang){
+  currentLang = lang;
+  const rtl = (lang === 'he');
+
+  document.documentElement.lang = lang;
+  document.documentElement.setAttribute('data-lang', lang);
+  document.documentElement.dir = (lang === 'he') ? 'rtl' : 'ltr';
+
+  const t = i18n[lang];
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    const k = el.dataset.i18n;
+    if (t[k]) el.innerHTML = t[k];
+  });
+
+  map.attributionControl.removeAttribution(lastContactAttr);
+  lastContactAttr = contactAttr[lang];
+  map.attributionControl.addAttribution(lastContactAttr);
+
+  attachContactHandler();
+}
+
+
+function refresh(){
+  const q = new URLSearchParams({ donation_date:dateInp.value });
+  fetch(`${API}/donations?${q}`)
+    .then(r=>r.json())
+    .then(list=>{
+      markers.clearLayers();
+      list.forEach(p=>{
+        const html = `
+          <strong>${p.name}</strong><br>
+          ${p.city} ${p.street||""} ${p.num_house||""}<br>
+          ${p.from_hour}&nbsp;–&nbsp;${p.to_hour}<br>
+          <a href="${p.scheduling_url}" target="_blank">${i18n[currentLang].register}</a>`;
+        L.marker([p.latitude,p.longitude]).bindPopup(html).addTo(markers);
+      });
+    });
+}
+
+/*──────────────────────────────  события  ─────────────────────────────────*/
+document.getElementById("lang-switcher").addEventListener("click", e=>{
+  if(e.target.matches("button[data-lang]")){
+    const lang = e.target.dataset.lang;
+    if(i18n[lang]){ applyLang(lang); refresh(); }
+  }
+});
+dateInp.addEventListener("change", refresh);
+
+const controlsPanel = document.getElementById('controls');
+const toggleButton = document.getElementById('toggle-controls');
+
+toggleButton.addEventListener('click', () => {
+  controlsPanel.classList.toggle('expanded');
+});
+
+
+applyLang(currentLang);
+refresh();
+
+const popup = document.createElement("div");
+popup.className = "contact-popup";
+popup.innerHTML = `
+  <button class="contact-popup-close" title="Close">&times;</button>
+  <div style="margin-bottom:0.5em"><strong>Contact</strong></div>
+  <div>
+    <a href="mailto:kuilef42+blood@gmail.com">kuilef42+blood@gmail.com</a><br>
+    <a href="https://t.me/kuilef" target="_blank">Telegram: @kuilef</a>
+  </div>
+`;
+document.body.appendChild(popup);
+
+function showContactPopup() {
+  popup.classList.add("active");
+}
+function hideContactPopup() {
+  popup.classList.remove("active");
+}
+
+// Делегируем обработчик на карту, чтобы ловить появление новой ссылки
+map.on("layeradd", attachContactHandler);
+map.on("layerremove", attachContactHandler);
+attachContactHandler();
+
+function attachContactHandler() {
+  setTimeout(()=>{
+    const link = document.getElementById("contact-link");
+    if(link){
+      link.onclick = (e)=>{
+        e.preventDefault();
+        showContactPopup();
+      };
+    }
+  }, 100);
+}
+
+popup.querySelector(".contact-popup-close").onclick = hideContactPopup;
+
+document.addEventListener("mousedown", function(e){
+  if(popup.classList.contains("active") && !popup.contains(e.target) && !e.target.classList.contains("contact-link")){
+    hideContactPopup();
+  }
+});
+
+</script>
+</body>
+</html>
+</file>
+<file path="mda-proxy/src/worker.js">
+// ──────────────────────────────────────────────────────────────────────────
+// Cloudflare Worker — раз в 7 дней тянет расписание сдачи крови MDA
+// и хранит ЕДИНСТВЕННУЮ пару key/value в KV:
+//   key:   "mda"
+//   value: строка JSON вида `[{"DateDonation":"2025-08-17T00:00:00", ...}, ...]`
+//
+// HTTP-интерфейс:
+//   • GET /              — отдаёт содержимое ключа "mda" (или [] если пусто)
+//   • GET /?date=latest  — то же самое (для обратной совместимости)
+//
+// Дополнительно:
+//   • GET /refresh       — ручной запуск обновления (удобно для проверки)
+//   • Обрабатывает CORS (OPTIONS) и не использует cacheTtl=0.
+// ──────────────────────────────────────────────────────────────────────────
+
+const ENDPOINT = "https://www.mdais.org/umbraco/api/invoker/execute";
+const SINGLE_KEY = "mda"; // единственный ключ в KV
+
+const PAYLOAD = {
+  RequestHeader: {
+    Application: 101,
+    Module:      "BloodBank",
+    Function:    "GetAllDetailsDonations",
+    Token:       ""
+  },
+  RequestData: ""
+};
+
+/** Выполнить запрос к MDA и перезаписать ключ SINGLE_KEY в KV */
+async function refreshKV(env) {
+  const resp = await fetch(ENDPOINT, {
+    method:  "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Referer":      "https://www.mdais.org/blood-donation",
+      "User-Agent":   "Mozilla/5.0 (compatible; MDA-Pipeline/1.0)",
+      "Accept":       "application/json, text/plain, */*"
+    },
+    body: JSON.stringify(PAYLOAD)
+  });
+
+  if (!resp.ok) {
+    throw new Error(`MDA API HTTP ${resp.status}`);
+  }
+
+  const payload = await resp.json();
+
+  // У API поле Result — это СТРОКА с JSON-массивом.
+  // Валидируем, что это действительно массив, и кладём исходную строку в KV.
+  let resultStr = "";
+  if (payload && typeof payload.Result === "string") {
+    // Проверим, что парсится в массив (чтобы не хранить мусор)
+    const parsed = JSON.parse(payload.Result);
+    if (!Array.isArray(parsed)) {
+      throw new Error("Unexpected MDA API format: Result is not an array");
+    }
+    resultStr = payload.Result;
+  } else {
+    throw new Error("Unexpected MDA API payload: missing Result string");
+  }
+
+  // Перезапишем единственный ключ. TTL не ставим, чтобы ключ не «протухал».
+  await env.MDA_DATA.put(SINGLE_KEY, resultStr);
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store, no-cache, must-revalidate"
+    }
+  });
+}
+
+export default {
+  /* ───────── 1) Периодическое обновление по cron (раз в 7 дней) ───────── */
+  async scheduled(_event, env) {
+    await refreshKV(env);
+  },
+
+  /* ───────── 2) HTTP-интерфейс ───────── */
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    // CORS preflight
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "*",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    // // Ручной запуск обновления
+    // if (url.pathname === "/refresh") {
+    //   try {
+    //     await refreshKV(env);
+    //     return new Response("OK", {
+    //       headers: { "Access-Control-Allow-Origin": "*" }
+    //     });
+    //   } catch (e) {
+    //     return new Response(String(e?.message || e), {
+    //       status: 500,
+    //       headers: { "Access-Control-Allow-Origin": "*" }
+    //     });
+    //   }
+    // }
+
+    // Единая точка чтения: и /, и /?date=latest возвращают один и тот же ключ
+    // (любые другие значения date игнорируем и отдаём тот же снимок)
+    const data = await env.MDA_DATA.get(SINGLE_KEY);
+    // Если ключа нет — вернём пустой массив (валидный JSON)
+    return jsonResponse(data ?? "[]");
+  }
+};
+
+</file>
+<file path="mda-proxy/wrangler.toml">
+name = "mda-browser"
+main = "src/worker.js"
+compatibility_date = "2025-08-03"
+compatibility_flags = ["nodejs_compat_v2"]
+
+[triggers]
+# Вт 06:05 IDT (03:05 UTC)
+crons = ["5 3 * * 4"]
+
+[[kv_namespaces]]
+binding    = "MDA_DATA"
+id         = "0b4e0dd84c434b89b8ef1d8dcdf75891"        # Namespace ID из Dashboard / wrangler kv:namespace create
+preview_id = "4db14f4293fb465aae048ae304a43ba1"        # чтобы wrangler dev писал в песочницу
+
+[observability.logs]
+enabled = true
+</file>
+<file path=".gitignore">
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are created by a PyInstaller script from a spec file
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyderworkspace
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# VSCode
+.vscode/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+geocache_nominatim.db
+geocache.db
+donations.db
+
+# Data files
+*.json
+short.html
+short_nominatim.html
+
+apis.txt
+/temp
+</file>
+<file path="03.09.2025.json">
+[
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "10:00",
+    "ToHour": "14:00",
+    "Name": "חרמון מוצב תחתון",
+    "City": "",
+    "Street": "",
+    "NumHouse": "",
+    "AccountType": "",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/AC9445FC-D6E7-4536-A216-2734707E3811",
+    "NameEnglish": "חרמון מוצב תחתון",
+    "CityEnglish": "",
+    "StreetEnglish": "",
+    "AccountTypeEnglish": ""
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "09:00",
+    "ToHour": "19:00",
+    "Name": "",
+    "City": "אשקלון",
+    "Street": "מרכז מסחרי",
+    "NumHouse": "",
+    "AccountType": "",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/E31AF136-8AAA-429D-9323-AF112B2F43D8",
+    "NameEnglish": "",
+    "CityEnglish": "אשקלון",
+    "StreetEnglish": "מרכז מסחרי",
+    "AccountTypeEnglish": ""
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "16:00",
+    "ToHour": "20:00",
+    "Name": "  מועדון עינב                                        ",
+    "City": "אפיקים",
+    "Street": "",
+    "NumHouse": "",
+    "AccountType": "",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/D2BCCC69-9405-4651-8E4B-006A88A046EC",
+    "NameEnglish": "  מועדון עינב                                        ",
+    "CityEnglish": "",
+    "StreetEnglish": "",
+    "AccountTypeEnglish": ""
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "16:00",
+    "ToHour": "20:30",
+    "Name": "חדר אוכל",
+    "City": "רמת דוד",
+    "Street": "",
+    "NumHouse": "",
+    "AccountType": "",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/F88545B1-F8A8-40D8-A2E8-162DF5A734D1",
+    "NameEnglish": "חדר אוכל",
+    "CityEnglish": "רמת דוד",
+    "StreetEnglish": "",
+    "AccountTypeEnglish": ""
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "16:00",
+    "ToHour": "21:00",
+    "Name": "מתחם קניות ",
+    "City": "חריש",
+    "Street": "דרך ארץ",
+    "NumHouse": "35",
+    "AccountType": "",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/B686397F-F300-4F50-A997-4759F35A9815",
+    "NameEnglish": "מתחם קניות ",
+    "CityEnglish": "",
+    "StreetEnglish": "",
+    "AccountTypeEnglish": ""
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "10:00",
+    "ToHour": "16:00",
+    "Name": "משביר י-ם",
+    "City": "ירושלים",
+    "Street": "המלך ג'ורג'",
+    "NumHouse": "20",
+    "AccountType": "",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/FA9D7453-A62B-4253-A94F-4556BA840953",
+    "NameEnglish": "משביר י-ם",
+    "CityEnglish": "ירושלים",
+    "StreetEnglish": "המלך ג'ורג'",
+    "AccountTypeEnglish": ""
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "16:00",
+    "ToHour": "22:00",
+    "Name": "משביר י-ם",
+    "City": "ירושלים",
+    "Street": "המלך ג'ורג'",
+    "NumHouse": "20",
+    "AccountType": "",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/CA16E10D-F403-44D7-A5CD-AB7510108907",
+    "NameEnglish": "משביר י-ם",
+    "CityEnglish": "ירושלים",
+    "StreetEnglish": "המלך ג'ורג'",
+    "AccountTypeEnglish": ""
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "09:00",
+    "ToHour": "17:00",
+    "Name": "  רח' המ\"ג 7 רוממה  (תחנה נגישה)                                 ",
+    "City": "ירושלים",
+    "Street": "",
+    "NumHouse": "",
+    "AccountType": " - תחנת מד\"א",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/790FB7B6-407E-4968-BFB5-AC5373E552DF",
+    "NameEnglish": "Mda Station Jerusalem ",
+    "CityEnglish": "Jerusalem ",
+    "StreetEnglish": "",
+    "AccountTypeEnglish": "MDA Station - "
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "16:00",
+    "ToHour": "20:00",
+    "Name": "מועדון הבית הכולל",
+    "City": "חוקוק",
+    "Street": "",
+    "NumHouse": "",
+    "AccountType": "",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/13BCD356-3E33-4F73-A04F-0C5868737E74",
+    "NameEnglish": "מועדון הבית הכולל",
+    "CityEnglish": "חוקוק",
+    "StreetEnglish": "",
+    "AccountTypeEnglish": ""
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "13:00",
+    "ToHour": "20:00",
+    "Name": "צמוד לבנין העיריה",
+    "City": "סח'נין",
+    "Street": "",
+    "NumHouse": "",
+    "AccountType": "",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/C1A749A0-F756-40DE-ABE9-9C4AA41889F5",
+    "NameEnglish": "צמוד לבנין העיריה",
+    "CityEnglish": "",
+    "StreetEnglish": "",
+    "AccountTypeEnglish": ""
+  },
+  {
+    "DateDonation": "2025-09-03T00:00:00",
+    "FromHour": "08:00",
+    "ToHour": "14:30",
+    "Name": "בנק הדם מד\"א /בית חולים שיבא תל השומר  (תחנה נגישה) ",
+    "City": "רמת גן",
+    "Street": "דרך שיבא",
+    "NumHouse": "",
+    "AccountType": " - שרותי הדם מד\"א",
+    "SchedulingURL": "https://bd.mda.org.il/#/pub-schedule/EDC03337-692C-4983-89A7-5046091245FB",
+    "NameEnglish": "shiba",
+    "CityEnglish": "ramat gan",
+    "StreetEnglish": "shiba st",
+    "AccountTypeEnglish": "MDA Blood Services"
+  }
+]
+</file>
+<file path="Caddyfile">
+tirmudam.org {
+    root * /usr/share/caddy
+    file_server
+    reverse_proxy /donations* api:8000
+    encode gzip zstd
+}
+</file>
+<file path="docker-compose.yml">
+#############################
+# BloodDonation – Production
+# обновление данных: 1 раз в 5 дней
+#############################
+
+services:
+  # ──────────────────────────
+  # REST API + static frontend
+  # ──────────────────────────
+  api:
+    build: .
+    env_file: .env
+    volumes:
+      - ./backend/db:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/donations"]
+      interval: 1m
+      retries: 3
+
+  # ──────────────────────────
+  # Еженедельный ETL-pipeline
+  # ──────────────────────────
+  pipeline:
+    environment:
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    build: .
+    env_file: .env
+    volumes:
+      - ./backend/db:/data
+    command: >
+      bash -c "
+        while true; do
+          echo '[Pipeline] ─── $$(date -u) ─ start' &&
+          python -m backend.data_pipeline.run_pipeline &&
+          echo '[Pipeline] ─── $$(date -u) ─ finish; sleeping 1 days' &&
+          sleep 86400;       # 1×24×60×60
+        done"
+    restart: unless-stopped
+
+  # ──────────────────────────
+  # HTTPS-прокси + статик
+  # ──────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend:/usr/share/caddy
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+# ──────────────
+# Persisted data
+# ──────────────
+volumes:
+  caddy_data:
+  caddy_config:
+
+</file>
+<file path="Dockerfile">
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip certifi
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DONATIONS_DB_PATH=/data/donations.db \
+    GEOCACHE_DB_PATH=/data/geocache.db
+
+WORKDIR /app
+
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY backend backend
+COPY frontend frontend
+
+# создаём volume-директории для SQLite
+VOLUME ["/data"]
+
+EXPOSE 8000
+CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+</file>
+<file path="README.md">
+# Blood Donation Map
+
+**Blood Donation Map** is a web application that visualizes Magen David Adom (MDA) blood donation station locations in Israel on an interactive map, allowing users to find and register for donation appointments.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Database Schema](#database-schema)
+- [Running the Data Pipeline](#running-the-data-pipeline)
+- [Running the Server](#running-the-server)
+- [API Endpoints](#api-endpoints)
+- [Frontend](#frontend)
+- [Directory Structure](#directory-structure)
+- [Deployment](#deployment)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
+
+---
+
+## Features
+
+- **Fetch & Process Data**: Retrieves donation station details from the official MDA API.
+- **Geocoding with Cache**: Uses Google Places Text Search API to geocode addresses, with SQLite-based caching to minimize API calls.
+- **Backend API**: FastAPI-powered service exposing endpoints for donation data and static files.
+- **Interactive Frontend**: Leaflet.js map with date filtering and pop-up registration links.
+- **Multi-language Support**: English, Russian, and Hebrew UI.
+
+## Architecture
+
+1. **Data Pipeline**: `backend/data_pipeline/` fetches raw MDA data, geocodes locations, and populates two SQLite databases:
+   - `donations.db` (processed station data)
+   - `geocache.db` (address → coordinates cache)
+2. **Database Layer**: `backend/db/` defines schemas and data access operations.
+3. **API Layer**: `backend/app.py` serves the frontend and provides REST endpoints.
+4. **Frontend**: `frontend/index.html` uses Leaflet.js to render the map and UI controls.
+
+## Prerequisites
+
+- **Python**: 3.8 or higher
+- **pip**: Python package manager
+- **Google API Key**: Enable the Places API in Google Cloud Console
+
+## Installation
+
+1. **Clone the repository**:
+
+   ```bash
+   git clone https://github.com/your-org/BloodDonationMap.git
+   cd BloodDonationMap
+   ```
+
+2. **Install backend dependencies**:
+
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   ```
+
+## Configuration
+
+Before running the pipeline or server, set the required environment variable:
+
+```bash
+export GOOGLE_API_KEY="YOUR_GOOGLE_API_KEY"
+```
+
+
+## Database Schema
+
+- `` (via `backend/db/schema.py`):
+
+  - Table: `donations`
+    - `id`, `donation_date` (YYYY-MM-DD), `city`, `street`, `num_house`, `name`, `from_hour`, `to_hour`, `scheduling_url` (unique), `latitude`, `longitude`.
+    - Indexes on `donation_date` and `city`.
+
+- ``:
+
+  - Table: `geocache`
+    - `key` (address composite), `lat`, `lon`, `is_exact` (flag), `updated_at`.
+
+## Running the Data Pipeline
+
+1. Navigate to the project root:
+   ```bash
+   cd BloodDonationMap
+   ```
+2. Execute the pipeline script:
+   ```bash
+   python -m backend.data_pipeline.run_pipeline
+   ```
+3. This step will:
+   - Create or update both SQLite databases.
+   - Fetch up donation records from MDA API.
+   - Geocode each record and cache results.
+   - Populate `donations.db` with processed data.
+
+## Running the Server
+
+Start the FastAPI server with Uvicorn:
+
+```bash
+uvicorn backend.app:app --reload
+```
+
+- The server will listen on `http://127.0.0.1:8000` by default.
+- Ensure `donations.db` exists before startup (pipeline must run first).
+
+## API Endpoints
+
+- `GET /` → Serves `frontend/index.html`
+- `GET /donations?donation_date=YYYY-MM-DD` → Returns JSON array of donation stations. Defaults to today's date if omitted.
+- `Static Files` → Accessible under `/frontend/` for assets.
+
+## Frontend
+
+- Open your browser at `http://localhost:8000/`.
+- Date picker filters stations by donation date.
+- Language switcher toggles UI between English, Russian, and Hebrew.
+- Click map markers to view station details and registration link.
+
+## Directory Structure
+
+```
+BloodDonationMap/
+├── backend/
+│   ├── data_pipeline/
+│   │   ├── geocoder.py       # Caching geocode logic (Google Places)
+│   │   ├── processor.py      # Fetch & process MDA data
+│   │   └── run_pipeline.py   # Entry point for pipeline
+│   ├── db/
+│   │   ├── operations.py     # Data access helpers
+│   │   └── schema.py         # SQLite schema definitions
+│   ├── app.py                # FastAPI application & endpoints
+│   └── requirements.txt      # Python dependencies
+├── frontend/
+│   └── index.html            # Leaflet.js map UI
+└── .gitignore
+```
+
+## Deployment
+
+- **Domain & HTTPS**: Point your domain (e.g., `bloodmap.example.com`) to the server's IP. Use a reverse proxy (e.g., Nginx) with SSL certificates via Let's Encrypt.
+- **Docker** (optional): You can containerize the backend and serve with Docker Compose.
+- **Environment Variables**: Ensure `GOOGLE_API_KEY` is set in your production environment.
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/foo`)
+3. Commit your changes (`git commit -m "feat: add foo"`)
+4. Push to the branch (`git push origin feature/foo`)
+5. Open a Pull Request
+
+## License
+
+This project is released under the MIT License. See [LICENSE](LICENSE) for details.
+
+## Acknowledgements
+
+- [Magen David Adom (MDA)](https://www.mdais.org)
+- [Google Places API](https://developers.google.com/maps/documentation/places)
+- [Leaflet.js](https://leafletjs.com)
+- [OpenStreetMap](https://www.openstreetmap.org)
+</file>

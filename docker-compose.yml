@@ -1,6 +1,6 @@
 #############################
 # BloodDonation – Production
-# обновление данных: 1 раз в 5 дней
+# обновление данных: каждые 4 часа
 #############################
 
 services:
@@ -19,7 +19,7 @@ services:
       retries: 3
 
   # ──────────────────────────
-  # Еженедельный ETL-pipeline
+  # ETL-pipeline после обновления Worker
   # ──────────────────────────
   pipeline:
     environment:
@@ -33,8 +33,8 @@ services:
       - -c
       - |
         while true; do
-          SECS=$$(python -c "from datetime import datetime, timedelta, timezone; now=datetime.now(timezone.utc); t=now.replace(hour=3, minute=20, second=0, microsecond=0); target=(t+timedelta(days=1)) if t<=now else t; print(int((target-now).total_seconds()))")
-          echo "[Pipeline] next run in $$SECS s until 03:20 UTC"
+          SECS=$$(python -c "from datetime import datetime, timedelta, timezone; now=datetime.now(timezone.utc); target=now.replace(minute=20, second=0, microsecond=0); target += timedelta(hours=1) if target <= now else timedelta(0); target += timedelta(hours=((4 - target.hour % 4) % 4)); print(int((target-now).total_seconds()))")
+          echo "[Pipeline] next run in $$SECS s until next 4-hour slot (:20 UTC)"
           sleep $$SECS
           echo "[Pipeline] --- $$(date -u) --- start"
           python -m backend.data_pipeline.run_pipeline
