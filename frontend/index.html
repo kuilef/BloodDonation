@@ -37,14 +37,8 @@
     #date-filter-form{ display:flex; flex-direction:row; gap:.5em; align-items:center; }
     [data-lang="he"] #date-filter-form{ flex-direction:row-reverse; }
 
-    #map-meta {
-      margin-top: 8px;
-      font-size: 12px;
-      color: #555;
-    }
-    #map-meta a { color: inherit; }
-    #map-meta .contact-link{ text-decoration:none; }
-    #map-meta .contact-link:hover{ text-decoration:underline; }
+    .leaflet-control-attribution .contact-link{ text-decoration:none; }
+    .leaflet-control-attribution .contact-link:hover{ text-decoration:underline; }
 
     .info-text {
       margin: 1em 0;
@@ -177,12 +171,6 @@
     <!-- Скрытое ISO-значение для запросов (YYYY-MM-DD) -->
     <input id="date" name="date" type="hidden">
   </form>
-
-  <div id="map-meta">
-    © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
-    <span aria-hidden="true">•</span>
-    <a href="#" id="contact-link" class="contact-link" data-i18n="contact">יצירת קשר</a>
-  </div>
 </div>
 
 <div id="map"></div>
@@ -201,7 +189,6 @@ const i18n = {
     info2_strong:"Please note:&nbsp;",
     info2_span:"The location on the map may not be exact, please verify on the <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA website</a>.",
     date_label:"Show donations for date",
-    contact:"Contact",
     register:"Register"
   },
   ru:{
@@ -210,7 +197,6 @@ const i18n = {
     info2_strong:"Внимание:&nbsp;",
     info2_span:"Местоположение на карте может быть неточным, пожалуйста, сверяйтесь с сайтом <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA</a>.",
     date_label:"Показать сдачи на дату",
-    contact:"Связь",
     register:"Запись"
   },
   he:{
@@ -219,9 +205,15 @@ const i18n = {
     info2_strong:"שימו לב:&nbsp;",
     info2_span:"המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר <a href='https://www.mdais.org/blood-donation' target='_blank'>מד\"א</a>.",
     date_label:"הצג תרומות לתאריך",
-    contact:"יצירת קשר",
     register:"להרשמה"
   }
+};
+
+/*───────────────────────────  надпись «Связь» в атрибуции  ─────────────────*/
+const contactAttr = {
+  en:'• <a href="#" id="contact-link" class="contact-link">Contact</a>',
+  ru:'• <a href="#" id="contact-link" class="contact-link">Связь</a>',
+  he:'• <a href="#" id="contact-link" class="contact-link">יצירת קשר</a>'
 };
 
 const API = "";                       // URL вашего backend’а
@@ -234,10 +226,17 @@ let currentLang = (() => {
 })();
 // END NEW
 
+let lastContactAttr = contactAttr[currentLang];
+
 /*─────────────────────────────  инициализация карты  ───────────────────────*/
-const map = L.map("map",{ zoomControl:false, attributionControl:false }).setView([31.8,34.9],8);
+const map = L.map("map",{ zoomControl:false }).setView([31.8,34.9],8);
+map.attributionControl.setPrefix(false);
 L.control.zoom({ position:"bottomright" }).addTo(map);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
+
+map.attributionControl.addAttribution(lastContactAttr);
 
 const markers = L.layerGroup().addTo(map);
 
@@ -333,6 +332,10 @@ function applyLang(lang){
     const k = el.dataset.i18n;
     if (t[k]) el.innerHTML = t[k];
   });
+
+  map.attributionControl.removeAttribution(lastContactAttr);
+  lastContactAttr = contactAttr[lang];
+  map.attributionControl.addAttribution(lastContactAttr);
 
   // Плейсхолдер под язык (минимально)
   const placeholders = { he:'DD/MM/YYYY', en:'DD/MM/YYYY', ru:'ДД/ММ/ГГГГ' };
