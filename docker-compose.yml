@@ -1,33 +1,38 @@
 #############################
-# BloodDonation – Production
+# BloodDonation - Production
 # обновление данных: каждые 4 часа
 #############################
 
 services:
-  # ──────────────────────────
-  # REST API + static frontend
-  # ──────────────────────────
   api:
     build: .
-    env_file: .env
-    volumes:
-      - ./backend/db:/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/donations"]
-      interval: 1m
-      retries: 3
-
-  # ──────────────────────────
-  # ETL-pipeline после обновления Worker
-  # ──────────────────────────
-  pipeline:
     environment:
-      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-    build: .
-    env_file: .env
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
     volumes:
-      - ./backend/db:/data
+      - ${BLOODDONATION_DB_PATH:-/root/coolify-stacks/blooddonation/db}:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/donations', timeout=5).read()"
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    expose:
+      - "8000"
+
+  # ETL-pipeline после обновления Worker
+  pipeline:
+    build: .
+    restart: unless-stopped
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
+    volumes:
+      - ${BLOODDONATION_DB_PATH:-/root/coolify-stacks/blooddonation/db}:/data
     command:
       - /bin/sh
       - -c
@@ -41,30 +46,3 @@ services:
           echo "[Pipeline] --- $$(date -u) --- finish"
           sleep 60
         done
-    restart: unless-stopped
-
-  # ──────────────────────────
-  # HTTPS-прокси + статик
-  # ──────────────────────────
-  caddy:
-    image: caddy:2-alpine
-    depends_on:
-      - api
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./frontend:/usr/share/caddy
-      - caddy_data:/data
-      - caddy_config:/config
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-
-# ──────────────
-# Persisted data
-# ──────────────
-volumes:
-  caddy_data:
-  caddy_config:
