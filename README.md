@@ -162,7 +162,7 @@ Contributions are welcome! Please:
 
 ## License
 
-This project is released under the MIT License. See [LICENSE](LICENSE) for details.
+This project is released under the MIT License. See [LICENSE.md](LICENSE.md) for details.
 
 ## Acknowledgements
 
