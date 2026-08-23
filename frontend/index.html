@@ -34,8 +34,33 @@
       text-align:start;
     }
 
-    #date-filter-form{ display:flex; flex-direction:row; gap:.5em; align-items:center; }
+    #date-filter-form{ display:flex; flex-direction:row; flex-wrap:wrap; gap:.5em; align-items:center; }
     [data-lang="he"] #date-filter-form{ flex-direction:row-reverse; }
+    #date-navigation{
+      display:inline-flex;
+      flex:0 0 auto;
+      direction:ltr;
+      align-items:center;
+      gap:.25rem;
+    }
+    #date-navigation button{
+      min-width:2.25rem;
+      height:21px;
+      box-sizing:border-box;
+      padding:0;
+      border:1px solid #bbb;
+      border-radius:4px;
+      background:#f8f9fa;
+      color:#333;
+      cursor:pointer;
+      font-size:1.15rem;
+      line-height:19px;
+    }
+    #date-navigation button:hover{ background:#e9ecef; }
+    #date-navigation button:focus-visible{
+      outline:2px solid #0d6efd;
+      outline-offset:2px;
+    }
 
     .leaflet-control-attribution .contact-link{ text-decoration:none; }
     .leaflet-control-attribution .contact-link:hover{ text-decoration:underline; }
@@ -166,8 +191,12 @@
 
   <form id="date-filter-form">
     <label for="date_ui" data-i18n="date_label">הצג תרומות לתאריך:</label>
-    <!-- Видимый инпут для пользователя (DD/MM/YYYY) -->
-    <input id="date_ui" type="text" size="10" autocomplete="off" inputmode="numeric" placeholder="DD/MM/YYYY">
+    <div id="date-navigation">
+      <button id="previous-date" type="button" data-i18n-aria="previous_date" aria-label="Previous day">‹</button>
+      <!-- Видимый инпут для пользователя (DD/MM/YYYY) -->
+      <input id="date_ui" type="text" size="10" autocomplete="off" inputmode="numeric" placeholder="DD/MM/YYYY">
+      <button id="next-date" type="button" data-i18n-aria="next_date" aria-label="Next day">›</button>
+    </div>
     <!-- Скрытое ISO-значение для запросов (YYYY-MM-DD) -->
     <input id="date" name="date" type="hidden">
   </form>
@@ -189,6 +218,8 @@ const i18n = {
     info2_strong:"Please note:&nbsp;",
     info2_span:"The location on the map may not be exact, please verify on the <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA website</a>.",
     date_label:"Show donations for date",
+    previous_date:"Previous day",
+    next_date:"Next day",
     register:"Register"
   },
   ru:{
@@ -197,6 +228,8 @@ const i18n = {
     info2_strong:"Внимание:&nbsp;",
     info2_span:"Местоположение на карте может быть неточным, пожалуйста, сверяйтесь с сайтом <a href='https://www.mdais.org/blood-donation' target='_blank'>MDA</a>.",
     date_label:"Показать сдачи на дату",
+    previous_date:"Предыдущий день",
+    next_date:"Следующий день",
     register:"Запись"
   },
   he:{
@@ -205,6 +238,8 @@ const i18n = {
     info2_strong:"שימו לב:&nbsp;",
     info2_span:"המיקום על המפה עשוי לא להיות מדויק, יש לוודא באתר <a href='https://www.mdais.org/blood-donation' target='_blank'>מד\"א</a>.",
     date_label:"הצג תרומות לתאריך",
+    previous_date:"היום הקודם",
+    next_date:"היום הבא",
     register:"להרשמה"
   }
 };
@@ -291,10 +326,45 @@ const picker = datepicker('#date_ui', {
   position: desktopPos,
   formatter: (input, date) => { input.value = ddmmyyyy(date); },
   onSelect: (instance, date) => {
-    dateIsoInp.value = isoFromDate(date);
-    refresh();
+    if (date) selectDate(date);
   },
   onShow: () => { if (isMobile) positionPickerMobile(); }
+});
+
+function dateFromIso(iso){
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m) return null;
+
+  const y = Number(m[1]);
+  const mth = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const date = new Date(y, mth, d);
+  if(date.getFullYear() !== y || date.getMonth() !== mth || date.getDate() !== d) return null;
+  return date;
+}
+
+function selectDate(date, syncPicker = false){
+  if(syncPicker) picker.setDate(date, true);
+  dateUiInp.value = ddmmyyyy(date);
+  dateIsoInp.value = isoFromDate(date);
+  refresh();
+}
+
+function shiftDate(days){
+  const currentDate = dateFromIso(dateIsoInp.value);
+  if(!currentDate) return;
+  currentDate.setDate(currentDate.getDate() + days);
+  selectDate(currentDate, true);
+}
+
+document.getElementById('previous-date').addEventListener('click', event=>{
+  event.preventDefault();
+  shiftDate(-1);
+});
+
+document.getElementById('next-date').addEventListener('click', event=>{
+  event.preventDefault();
+  shiftDate(1);
 });
 
 // Установка сегодняшней даты по умолчанию
@@ -331,6 +401,11 @@ function applyLang(lang){
   document.querySelectorAll('[data-i18n]').forEach(el=>{
     const k = el.dataset.i18n;
     if (t[k]) el.innerHTML = t[k];
+  });
+
+  document.querySelectorAll('[data-i18n-aria]').forEach(el=>{
+    const k = el.dataset.i18nAria;
+    if (t[k]) el.setAttribute('aria-label', t[k]);
   });
 
   map.attributionControl.removeAttribution(lastContactAttr);
@@ -374,13 +449,15 @@ document.getElementById("lang-switcher").addEventListener("click", e=>{
 });
 
 // Обработка ручного ввода даты
-dateUiInp.addEventListener('change', () => {
+function applyManualDate(){
   const iso = parseUiToIso(dateUiInp.value);
-  if(iso){
-    dateIsoInp.value = iso;
-    refresh();
-  }
-});
+  if(!iso || iso === dateIsoInp.value) return;
+  const date = dateFromIso(iso);
+  if(date) selectDate(date, true);
+}
+
+dateUiInp.addEventListener('input', applyManualDate);
+dateUiInp.addEventListener('change', applyManualDate);
 
 const controlsPanel = document.getElementById('controls');
 const toggleButton = document.getElementById('toggle-controls');
